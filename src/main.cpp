@@ -1,84 +1,117 @@
+/**
+ * ESP32 position motion control example with magnetic sensor
+ */
+#include <Arduino.h>
 #include <SimpleFOC.h>
 
-// init BLDC motor
-BLDCMotor motor = BLDCMotor( 11 );
-// init driver
-BLDCDriver3PWM driver = BLDCDriver3PWM(11, 10, 9, 8);
-//  init encoder
-Encoder encoder = Encoder(2, 3, 2048);
-// channel A and B callbacks
-void doA(){encoder.handleA();}
-void doB(){encoder.handleB();}
+// SPI Magnetic sensor instance (AS5047U example)
+// MISO 12
+// MOSI 9
+// SCK 14
+// magnetic sensor instance - SPI
+// MagneticSensorSPI sensor = MagneticSensorSPI(AS5147_SPI, 15);
 
-// commander interface
+// I2C Magnetic sensor instance (AS5600 example)
+// make sure to use the pull-ups!!
+// SDA 21
+// SCL 22
+// magnetic sensor instance - I2C
+//MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
+
+// Analog output Magnetic sensor instance (AS5600)
+MagneticSensorAnalog sensor = MagneticSensorAnalog(36, 14, 1020);
+
+// Motor instance
+BLDCMotor motor = BLDCMotor(11);
+BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 7);
+
+
+// angle set point variable
+float target_angle = 0;
+// instantiate the commander
 Commander command = Commander(Serial);
-void onTarget(char* cmd){ command.motion(&motor, cmd); }
+void doTarget(char* cmd) { command.scalar(&target_angle, cmd); }
 
 void setup() {
 
-  pinMode(12,OUTPUT); // declares pin 12 as output and sets it to LOW
+  // use monitoring with serial 
+  Serial.begin(115200);
+  // enable more verbose output for debugging
+  // comment out if not needed
+  SimpleFOCDebug::enable(&Serial);
 
-  // initialize encoder hardware
-  encoder.init();
-  // hardware interrupt enable
-  encoder.enableInterrupts(doA, doB);
+  // initialise magnetic sensor hardware
+  sensor.init();
   // link the motor to the sensor
-  motor.linkSensor(&encoder);
+  motor.linkSensor(&sensor);
 
-  // power supply voltage
-  // default 12V
+  // driver config
+  // power supply voltage [V]
   driver.voltage_power_supply = 12;
   driver.init();
-  // link the motor to the driver
+  // link the motor and the driver
   motor.linkDriver(&driver);
 
-  // set control loop to be used
+  // choose FOC modulation (optional)
+  motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
+
+  // set motion control loop to be used
   motor.controller = MotionControlType::angle;
-  
-  // controller configuration based on the control type 
+
+  // contoller configuration
+  // default parameters in defaults.h
+
   // velocity PI controller parameters
-  // default P=0.5 I = 10
-  motor.PID_velocity.P = 0.2;
+  motor.PID_velocity.P = 0.2f;
   motor.PID_velocity.I = 20;
-  
-  //default voltage_power_supply
+  // maximal voltage to be set to the motor
   motor.voltage_limit = 6;
 
-  // velocity low pass filtering
-  // default 5ms - try different values to see what is the best. 
+  // velocity low pass filtering time constant
   // the lower the less filtered
-  motor.LPF_velocity.Tf = 0.02;
+  motor.LPF_velocity.Tf = 0.01f;
 
-  // angle P controller 
-  // default P=20
+  // angle P controller
   motor.P_angle.P = 20;
-  //  maximal velocity of the position control
-  // default 20
-  motor.velocity_limit = 4;
-  
+  // maximal velocity of the position control
+  motor.velocity_limit = 40;
+
+  // comment out if not needed
+  motor.useMonitoring(Serial);
+
+
   // initialize motor
   motor.init();
-  // align encoder and start FOC
+  // align sensor and start FOC
   motor.initFOC();
 
   // add target command T
-  command.add('T', doTarget, "motion control");
+  command.add('T', doTarget, "target angle");
 
-  // monitoring port
-  Serial.begin(115200);
-  Serial.println("Motor ready.");
-  Serial.println("Set the target angle using serial terminal:");
+  Serial.println(F("Motor ready."));
+  Serial.println(F("Set the target angle using serial terminal:"));
   _delay(1000);
 }
 
 void loop() {
-  // iterative FOC function
+
+  // main FOC algorithm function
+  // the faster you run this function the better
+  // Arduino UNO loop  ~1kHz
+  // Bluepill loop ~10kHz
   motor.loopFOC();
 
-  // function calculating the outer position loop and setting the target position 
-  motor.move();
+  // Motion control function
+  // velocity, position or voltage (defined in motor.controller)
+  // this function can be run at much lower frequency than loopFOC() function
+  // You can also use motor.move() and set the motor.target in the code
+  motor.move(target_angle);
 
-  // commander interface with the user
-  commander.run();
 
+  // function intended to be used with serial plotter to monitor motor variables
+  // significantly slowing the execution down!!!!
+  // motor.monitor();
+
+  // user communication
+  command.run();
 }
