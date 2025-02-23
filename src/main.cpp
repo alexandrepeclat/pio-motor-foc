@@ -7,6 +7,9 @@
 #include <WiFi.h>
 #include <secrets.h>
 
+
+const int VELOCITY_LIMIT = 40;
+
 // SPI Magnetic sensor instance (AS5047U example)
 // MISO 12
 // MOSI 9
@@ -20,7 +23,6 @@
 // SCL 22
 // magnetic sensor instance - I2C
 // MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
-
 // Analog output Magnetic sensor instance (AS5600)
 MagneticSensorAnalog sensor = MagneticSensorAnalog(36, 14, 1020);
 
@@ -59,9 +61,10 @@ Command parseCommand(const String& input) {
     cmd.value = input.substring(2, 4).toInt();  // '50' -> 50
     cmd.interval = input.substring(5).toInt();  // '5000' -> 5000
     cmd.valid = true;
+    return cmd;
   } else {
     Command cmd = {'\0', -1, -1, -1, false};  // Valeurs par défaut pour une commande invalide
-
+    return cmd;
   }
 }
 
@@ -74,25 +77,24 @@ void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventTyp
 
     // Parser la commande
     Command cmd = parseCommand(input);
-    if (cmd.valid) {
-      // Appliquer la commande
-      Serial.print("Action: ");
-      Serial.println(cmd.action);
-      Serial.print("Axis: ");
-      Serial.println(cmd.axis);
-      Serial.print("Value: ");
-      Serial.println(cmd.value);
-      Serial.print("Interval: ");
-      Serial.println(cmd.interval);
+    if (cmd.action == 'L') {
+      // Angle cible
+      float target_position = cmd.value;  // C'est la valeur que tu veux atteindre
+      // Angle actuel
+      float current_position = sensor.getAngle(); // Valeur actuelle de l'angle
+      // Calcul de la différence d'angle
+      float delta_angle = target_position - current_position;
+      // Calcul de la vitesse nécessaire (en degrés par seconde)
+      float velocity = delta_angle / (cmd.interval / 1000.0); // intervalle en secondes
 
-      // Ajuster l'angle du moteur (exemple avec un axe)
-      if (cmd.axis == 0) {
-        target_angle = cmd.value;  // Ajuster l'angle selon la valeur reçue
-        motor.move(target_angle);  // Déplacer le moteur
+      // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
+      if (velocity > VELOCITY_LIMIT) {
+        velocity = VELOCITY_LIMIT;
       }
 
-      // Attendre selon l'intervalle
-      delay(cmd.interval);
+      // Définir la vitesse et l'angle cible
+      target_angle = target_position;
+      motor.velocity_limit = velocity;  // Utilise la vitesse calculée
     }
   } else if (type == WS_EVT_CONNECT) {
     Serial.println("WebSocket client connected");
