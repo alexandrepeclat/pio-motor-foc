@@ -11,6 +11,7 @@ const WebSocket = require('ws');
 const wss = new WebSocket.Server({ server });
 
 const commands = [
+    'L000I1000',
     'L010I1000', 
     'L020I1000', 
     'L030I1000', 

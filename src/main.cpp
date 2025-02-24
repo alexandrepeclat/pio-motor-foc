@@ -20,12 +20,12 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);
 WebSocketsClient ws;
 
 // angle set point variable
-float target_angle = 0;
+volatile float target_angle = 0;
 // instantiate the commander
 Commander command = Commander(Serial);
-void doTarget(char* cmd) {
-  command.scalar(&target_angle, cmd);
-}
+// void doTarget(char* cmd) {
+//   command.scalar(&target_angle, cmd);
+// }
 
 // Fonction pour analyser la commande reçue
 struct Command {
@@ -70,15 +70,19 @@ void executeCommand(Command cmd) {
     float delta_angle = target_position - current_position;
     float velocity = abs(delta_angle / (cmd.interval / 1000.0));
     Serial.println("T: " + String(target_position) + " C: " + String(current_position) + " D: " + String(delta_angle) + " V: " + String(velocity));
-
+    Serial.print(target_position, 10);
     // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
     if (velocity > 20) {
       velocity = 20;
     }
 
     // Définir la vitesse et l'angle cible
-    target_angle = target_position;
-    //motor.velocity_limit = velocity;
+    float roundedValue = round(target_position * 100) / 100.0;
+    Serial.println("Rounded value: " + String(roundedValue));
+    noInterrupts();
+    target_angle = roundedValue;
+    interrupts();
+    // motor.velocity_limit = velocity;
   }
 }
 
@@ -127,8 +131,8 @@ void setup() {
 
   // Initialisation du serveur WebSocket
   ws.begin("192.168.0.173", 1234, "/");
-  ws.onEvent(onWsEvent);
-  ws.setReconnectInterval(5000);
+ ws.onEvent(onWsEvent);
+   ws.setReconnectInterval(5000);
 
   // enable more verbose output for debugging
   // comment out if not needed
@@ -173,7 +177,7 @@ void setup() {
   motor.velocity_limit = 20;
 
   // comment out if not needed
-  motor.useMonitoring(Serial);
+  // motor.useMonitoring(Serial);
 
   // initialize motor
   motor.init();
@@ -181,7 +185,7 @@ void setup() {
   motor.initFOC();
 
   // add target command T
-  command.add('T', doTarget, "target angle");
+  // command.add('T', doTarget, "target angle");
 
   Serial.println(F("Motor ready."));
   Serial.println(F("Set the target angle using serial terminal:"));
