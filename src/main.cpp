@@ -20,12 +20,12 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);
 WebSocketsClient ws;
 
 // angle set point variable
-volatile float target_angle = 0;
+float target_angle = 0;
 // instantiate the commander
 Commander command = Commander(Serial);
-// void doTarget(char* cmd) {
-//   command.scalar(&target_angle, cmd);
-// }
+void doTarget(char* cmd) {
+  command.scalar(&target_angle, cmd);
+}
 
 // Fonction pour analyser la commande reçue
 struct Command {
@@ -169,10 +169,12 @@ void setup() {
 
   // velocity low pass filtering time constant
   // the lower the less filtered
-  motor.LPF_velocity.Tf = 0.01f;
+  motor.LPF_velocity.Tf = 0.05;  // Augmente le filtre (par défaut 0.01)
 
-  // angle P controller
+
+  // angle P controller https://docs.simplefoc.com/angle_loop
   motor.P_angle.P = 20;
+  motor.P_angle.P = 10;  // Commence par diminuer à la moitié (valeur actuelle = 20)
   // maximal velocity of the position control
   motor.velocity_limit = 20;
 
@@ -185,7 +187,7 @@ void setup() {
   motor.initFOC();
 
   // add target command T
-  // command.add('T', doTarget, "target angle");
+  command.add('T', doTarget, "target angle");
 
   Serial.println(F("Motor ready."));
   Serial.println(F("Set the target angle using serial terminal:"));
@@ -208,7 +210,7 @@ void loop() {
 
   // function intended to be used with serial plotter to monitor motor variables
   // significantly slowing the execution down!!!!
-  // motor.monitor();
+  //  motor.monitor();
 
   // user communication
   command.run();
