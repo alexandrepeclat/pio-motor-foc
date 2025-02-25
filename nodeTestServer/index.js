@@ -12,15 +12,15 @@ const wss = new WebSocket.Server({ server });
 
 const commands = [
     'L000I1000',
-    'L010I1000', 
+    'L010I0500', 
     'L020I1000', 
-    'L030I1000', 
+    'L030I0500', 
     'L040I1000', 
-    'L050I1000', 
+    'L050I0500', 
     'L040I1000', 
-    'L030I1000', 
+    'L030I0500', 
     'L020I1000',
-    'L010I1000',
+    'L010I0500',
     'L000I1000'
 ];
 
@@ -40,7 +40,7 @@ wss.on('connection', (ws) => {
             clearInterval(intervalId);
             ws.close(); // Ferme la connexion après l'envoi des 10 messages
         }
-    }, 5000); // Envoie un message toutes les secondes
+    }, 1000); // Envoie un message toutes les secondes
 
     ws.on('close', () => {
         console.log('Client disconnected');

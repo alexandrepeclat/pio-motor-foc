@@ -9,7 +9,7 @@
 
 // const int VELOCITY_LIMIT = 40;
 
-// #define PWM_PIN 
+// #define PWM_PIN
 // MagneticSensorPWM sensor = MagneticSensorPWM(PWM_PIN, 4, 904);
 MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
 
@@ -83,7 +83,7 @@ void executeCommand(Command cmd) {
     noInterrupts();
     target_angle = roundedValue;
     interrupts();
-    // motor.velocity_limit = velocity;
+    motor.velocity_limit = velocity;
   }
 }
 
@@ -137,16 +137,16 @@ void setup() {
   // Serial.print("SCK: ");
   // Serial.println(SCK);
   // Serial.print("SS: ");
-  // Serial.println(SS);  
+  // Serial.println(SS);
 
   // Initialisation du serveur WebSocket
   ws.begin("192.168.0.173", 1234, "/");
- ws.onEvent(onWsEvent);
-   ws.setReconnectInterval(5000);
+  ws.onEvent(onWsEvent);
+  ws.setReconnectInterval(5000);
 
   // enable more verbose output for debugging
   // comment out if not needed
-  //SimpleFOCDebug::enable(&Serial);
+  // SimpleFOCDebug::enable(&Serial);
 
   // initialise magnetic sensor hardware
   sensor.init();
@@ -181,14 +181,13 @@ void setup() {
   // the lower the less filtered
   motor.LPF_velocity.Tf = 0.01;  // Augmente le filtre (par défaut 0.01)
 
-
   // angle P controller https://docs.simplefoc.com/angle_loop
   motor.P_angle.P = 20;  // Commence par diminuer à la moitié (valeur actuelle = 20)
   // maximal velocity of the position control
   motor.velocity_limit = 20;
 
   // comment out if not needed
-   motor.useMonitoring(Serial);
+  motor.useMonitoring(Serial);
 
   // initialize motor
   motor.init();
