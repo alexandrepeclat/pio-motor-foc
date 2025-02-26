@@ -109,7 +109,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     executeCommand(cmd);
   } else if (type == WStype_CONNECTED) {
     Serial.println("WebSocket connected");
-    ws.sendTXT("Hello Server");  // Envoie un message initial
+    ws.sendTXT("{ \"identifier\": \"myesp\", \"address\": \"00000000\", \"version\": 0 }");  // Envoie un message initial
   } else if (type == WStype_DISCONNECTED) {
     Serial.println("WebSocket disconnected");
   } else if (type == WStype_ERROR) {
@@ -140,7 +140,8 @@ void setup() {
   // Serial.println(SS);
 
   // Initialisation du serveur WebSocket
-  ws.begin("192.168.0.173", 1234, "/");
+  //ws.begin("192.168.0.173", 1234, "/"); //PC
+  ws.begin("192.168.0.204", 54817, "/"); //HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
