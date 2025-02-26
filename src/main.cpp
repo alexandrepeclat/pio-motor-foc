@@ -95,6 +95,9 @@ const int CMD_MIN = 0;
 const int CMD_MAX = 100;
 
 float mapFloat(float value, float inMin, float inMax, float outMin, float outMax) {
+  if (inMin == inMax)
+    return outMin;                         // Évite la division par zéro
+  value = constrain(value, inMin, inMax);  // Empêche l'extrapolation
   return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
 }
 
@@ -107,7 +110,7 @@ void executeCommand(Command cmd) {
     Serial.println("Command ignored: Motor not running");
     return;
   }
-  if (cmd.action == 'L') {
+  if (cmd.action == 'L' && cmd.axis == 0) {
     Serial.println("CMD: A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval));
     float target_position = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle);
     float current_position = sensor.getAngle();
@@ -220,7 +223,7 @@ void setup() {
   motor.P_angle.P = 20;  // Commence par diminuer à la moitié (valeur actuelle = 20)
 
   // comment out if not needed
-  motor.useMonitoring(Serial);
+  //motor.useMonitoring(Serial);
 
   // initialize motor
   motor.init();
@@ -236,11 +239,6 @@ void setup() {
 
   Serial.println(F("Motor ready."));
   Serial.println(F("Set the target angle using serial terminal:"));
-  _delay(1000);
-}
-
-// Fonction pour calibrer les limites du moteur
-void calibrateLimits() {
 }
 
 void loop() {
@@ -251,7 +249,7 @@ void loop() {
         motor.disable();
       }
       float currentAngle = sensor.getAngle();
-      target_angle = currentAngle; // Set target angle as the current angle, for not "jumping" when starting
+      target_angle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
       if (currentAngle < minAngle) {
         minAngle = currentAngle;
         Serial.println("Min-max angles: " + String(minAngle) + " " + String(maxAngle));
@@ -275,7 +273,7 @@ void loop() {
         motor.disable();
       }
       float currentAngle = sensor.getAngle();
-      target_angle = currentAngle; // Set target angle as the current angle, for not "jumping" when starting
+      target_angle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
       motor.voltage_limit = 0;
       motor.velocity_limit = 0;
       break;
