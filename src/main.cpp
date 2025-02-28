@@ -31,6 +31,7 @@ float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
 float target_angle = 0;
 
+const int MAX_VELOCITY = 50;
 const int CMD_MIN = 0;
 const int CMD_MAX = 100;
 
@@ -96,7 +97,6 @@ struct Command {
   int axis;
   int value;
   int interval;
-  bool valid;
 };
 
 Command parseCommand(const String& input) {
@@ -108,10 +108,9 @@ Command parseCommand(const String& input) {
     cmd.axis = input.charAt(1) - '0';           // '0' -> 0
     cmd.value = input.substring(2, 4).toInt();  // '50' -> 50
     cmd.interval = input.substring(5).toInt();  // '5000' -> 5000
-    cmd.valid = true;
     return cmd;
   } else {
-    Command cmd = {'\0', -1, -1, -1, false};  // Valeurs par défaut pour une commande invalide
+    Command cmd = {'\0', -1, -1, -1};  // Valeurs par défaut pour une commande invalide
     return cmd;
   }
 }
@@ -126,18 +125,16 @@ void executeCommand(Command cmd) {
     return;
   }
   if (cmd.action == 'L' && cmd.axis == 0) {
-    Serial.println("CMD: A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval));
     float target_position = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle);
     float current_position = sensor.getAngle();
-    float current_shaft_position = motor.shaft_angle;  // semble identique à sensor.getAngle()
     float delta_angle = target_position - current_position;
     float velocity = abs(delta_angle / (cmd.interval / 1000.0));
     float target_angle_rounded = round(target_position * 100) / 100.0;
+    Serial.println("CMD: A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T(r): " + String(target_angle_rounded) + " C(s): " + String(current_position) + " C(m): " + String(motor.shaft_angle) + " D: " + String(delta_angle) + " V: " + String(velocity));
 
-    Serial.println("T: " + String(target_angle_rounded) + " C(s): " + String(current_position) + " C(m): " + current_shaft_position + " D: " + String(delta_angle) + " V: " + String(velocity));
     // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
-    if (velocity > 20) {
-      velocity = 20;
+    if (velocity > MAX_VELOCITY) {
+      velocity = MAX_VELOCITY;
     }
 
     // Définir la vitesse et l'angle cible
@@ -153,19 +150,19 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
   Serial.println();
   if (type == WStype_TEXT) {
     String input = String((char*)payload);
-    Serial.println("Command received: " + input);
+    // Serial.println("Command received: " + input);
     Command cmd = parseCommand(input);
     executeCommand(cmd);
   } else if (type == WStype_BIN) {
     // Traitement des données binaires (Blob)
-    Serial.print("Received Binary Data:");
-    for (size_t i = 0; i < length; i++) {
-      Serial.print(payload[i], HEX);
-      Serial.print(" ");
-    }
-    Serial.println();
+    // Serial.print("Received Binary Data:");
+    // for (size_t i = 0; i < length; i++) {
+    //   Serial.print(payload[i], HEX);
+    //   Serial.print(" ");
+    // }
+    // Serial.println();
     String input = String((char*)payload);
-    Serial.println("Command received: " + input);
+    // Serial.println("Command received: " + input);
     Command cmd = parseCommand(input);
     executeCommand(cmd);
   } else if (type == WStype_CONNECTED) {
@@ -180,6 +177,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTimeout(10);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -189,8 +187,8 @@ void setup() {
   delay(1000);
 
   // Initialisation du serveur WebSocket
-  ws.begin("192.168.0.173", 1234, "/");  // PC
-  // ws.begin("192.168.0.204", 54817, "/"); //HyperV
+  //ws.begin("192.168.0.173", 1234, "/");  // PC
+  ws.begin("192.168.0.204", 54817, "/"); //HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
@@ -233,7 +231,7 @@ void setup() {
 }
 
 void loop() {
-  ws.loop();
+  ws.loop(); //TODO pendant la reconnexion ça fout la merde.....
   switch (appState) {
     case CALIBRATING_MANUALLY: {
       if (motor.enabled) {
@@ -258,7 +256,7 @@ void loop() {
         motor.enable();
       }
       motor.voltage_limit = 6;    // maximal voltage to be set to the motor
-      motor.velocity_limit = 20;  // maximal velocity of the position control
+      motor.velocity_limit = MAX_VELOCITY;  // maximal velocity of the position control
       break;
     }
     case STOPPED: {
