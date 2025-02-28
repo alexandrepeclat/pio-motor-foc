@@ -7,32 +7,22 @@
 #include <WiFi.h>
 #include <secrets.h>
 #include <limits>
+
 enum AppState {
   CALIBRATING_MANUALLY,
   RUNNING,
   STOPPED
 };
 
-AppState appState = AppState::STOPPED;
-
-// const int VELOCITY_LIMIT = 40;
-
-// #define PWM_PIN
-// MagneticSensorPWM sensor = MagneticSensorPWM(PWM_PIN, 4, 904);
-MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
-
-// Motor instance
-BLDCMotor motor = BLDCMotor(11);
-BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);
-
-// WebSocket client instance
 WebSocketsClient ws;
+MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
+BLDCMotor motor = BLDCMotor(11);
+BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15); //3 pwm pins + enable pin
 
-// Variables pour stocker les limites min et max
 float minAngle = std::numeric_limits<float>::max();
 float maxAngle = std::numeric_limits<float>::min();
+AppState appState = AppState::STOPPED;
 
-// angle set point variable
 float target_angle = 0;
 // instantiate the commander
 Commander command = Commander(Serial);
@@ -172,63 +162,34 @@ void setup() {
   }
   Serial.println("Connected to WiFi!");
 
-  // Serial.print("MOSI: ");
-  // Serial.println(MOSI);
-  // Serial.print("MISO: ");
-  // Serial.println(MISO);
-  // Serial.print("SCK: ");
-  // Serial.println(SCK);
-  // Serial.print("SS: ");
-  // Serial.println(SS);
-
   // Initialisation du serveur WebSocket
-  ws.begin("192.168.0.173", 1234, "/");  // PC
-  // ws.begin("192.168.0.204", 54817, "/"); //HyperV
+  //ws.begin("192.168.0.173", 1234, "/");  // PC
+   ws.begin("192.168.0.204", 54817, "/"); //HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
-  // enable more verbose output for debugging
-  // comment out if not needed
-  // SimpleFOCDebug::enable(&Serial);
+  // SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
+    //motor.useMonitoring(Serial);
 
-  // initialise magnetic sensor hardware
   sensor.init();
-  // sensor.enableInterrupt(doPWM);
-  // link the motor to the sensor
-  motor.linkSensor(&sensor);
-
-  // driver config
-  // power supply voltage [V]
-  driver.voltage_power_supply = 12;
+  
+  driver.voltage_power_supply = 12;   // power supply voltage [V]
   driver.init();
-  // link the motor and the driver
+
+  motor.linkSensor(&sensor);
   motor.linkDriver(&driver);
 
-  // choose FOC modulation (optional)
-  motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
 
-  // set motion control loop to be used
-  motor.controller = MotionControlType::angle;
-
-  // velocity PI controller parameters
-  motor.PID_velocity.P = 0.2f;
+  motor.foc_modulation = FOCModulationType::SpaceVectorPWM;   // choose FOC modulation (optional)
+  motor.controller = MotionControlType::angle;   // set motion control loop to be used
+  motor.PID_velocity.P = 0.2f;   // velocity PI controller parameters
   motor.PID_velocity.I = 20;
   motor.PID_velocity.D = 0;
+  motor.LPF_velocity.Tf = 0.01;     // velocity low pass filtering time constant  - the lower the less filtered
+  motor.P_angle.P = 20;   // angle P controller https://docs.simplefoc.com/angle_loop
 
-  // velocity low pass filtering time constant
-  // the lower the less filtered
-  motor.LPF_velocity.Tf = 0.01;  // Augmente le filtre (par défaut 0.01)
-
-  // angle P controller https://docs.simplefoc.com/angle_loop
-  motor.P_angle.P = 20;  // Commence par diminuer à la moitié (valeur actuelle = 20)
-
-  // comment out if not needed
-  //motor.useMonitoring(Serial);
-
-  // initialize motor
-  motor.init();
-  // align sensor and start FOC
-  motor.initFOC();
+  motor.init();  // initialize motor
+  motor.initFOC();   // align sensor and start FOC // TODO deplacer ailleurs pour le lancer que sur demande à la calibration 
 
   // add target command T
   command.add('t', doTarget, "target angle");
@@ -236,9 +197,6 @@ void setup() {
   command.add('r', doRun, "run");
   command.add('c', doCalibration, "calibrate");
   command.add('d', doPrintDebug, "print debug");
-
-  Serial.println(F("Motor ready."));
-  Serial.println(F("Set the target angle using serial terminal:"));
 }
 
 void loop() {
