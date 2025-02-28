@@ -31,7 +31,7 @@ float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
 float target_angle = 0;
 
-const int MAX_VELOCITY = 50;
+const int MAX_VELOCITY = 20;
 const int CMD_MIN = 0;
 const int CMD_MAX = 100;
 
