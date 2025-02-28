@@ -7,9 +7,9 @@
 #include <WiFi.h>
 #include <secrets.h>
 #include <limits>
-// #include <ESPAsyncWebServer.h>
+#include <ESPAsyncWebServer.h>
 #include <SerialCommandHandler.h>
-// #include <RestCommandHandler.h>
+#include <RestCommandHandler.h>
 
 enum AppState {
   CALIBRATING_MANUALLY,
@@ -18,10 +18,10 @@ enum AppState {
 };
 
 WebSocketsClient ws;
-// AsyncWebServer server(80);
-// AsyncCorsMiddleware cors;
+AsyncWebServer server(80);
+AsyncCorsMiddleware cors;
 SerialCommandHandler serialCommandHandler;
-// RestCommandHandler restCommandHandler(server);
+RestCommandHandler restCommandHandler(server);
 MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
 BLDCMotor motor = BLDCMotor(11);
 BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable pin
@@ -52,7 +52,7 @@ String doTargetRaw(float angle) {
   return "Target raw: " + String(target_angle);
 }
 
-String doTargetNormalized(float angleNormalized) {
+String doTargetNormalized(int angleNormalized) {
   if (!isCalibrated()) {
     return "Motor not calibrated yet";
   }
@@ -61,9 +61,9 @@ String doTargetNormalized(float angleNormalized) {
   return "Target normalized: " + String(angleNormalized) + " Target raw: " + String(target_angle);
 }
 
-// String doGetRestRoutes() {
-//   return restCommandHandler.getRoutesList();
-// }
+String doGetRestRoutes() {
+  return restCommandHandler.getRoutesList();
+}
 
 String doGetSerialCommands() {
   return serialCommandHandler.getCommandsList();
@@ -85,7 +85,6 @@ String doRun() {
 
 String doCalibrate() {
   appState = AppState::CALIBRATING_MANUALLY;
-  // motor.disable();                               // Désactiver le moteur pour calibration manuelle
   minAngle = std::numeric_limits<float>::max();  // Valeur initiale très haute
   maxAngle = std::numeric_limits<float>::min();  // Valeur initiale très basse
   return "Calibration started " + String(motor.target);
@@ -187,8 +186,8 @@ void setup() {
   delay(1000);
 
   // Initialisation du serveur WebSocket
-  //ws.begin("192.168.0.173", 1234, "/");  // PC
-  ws.begin("192.168.0.204", 54817, "/"); //HyperV
+  ws.begin("192.168.0.173", 1234, "/");  // PC
+  //ws.begin("192.168.0.204", 54817, "/"); //HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
@@ -214,24 +213,27 @@ void setup() {
   motor.initFOC();  // align sensor and start FOC // TODO deplacer ailleurs pour le lancer que sur demande à la calibration
 
   // Register Serial commands
+  serialCommandHandler.registerCommand("s", doStop);
   serialCommandHandler.registerCommand("stop", doStop);
+  serialCommandHandler.registerCommand("c", doCalibrate);
   serialCommandHandler.registerCommand("calibrate", doCalibrate);
+  serialCommandHandler.registerCommand("r", doRun);
   serialCommandHandler.registerCommand("run", doRun);
-  serialCommandHandler.registerCommand<float>("target", {"target"}, doTargetNormalized);
+  serialCommandHandler.registerCommand<int>("target", {"target"}, doTargetNormalized);
   serialCommandHandler.registerCommand("debug", doGetDebug);
   serialCommandHandler.registerCommand("help", doGetSerialCommands);
 
   // Register REST API routes
-  // restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
-  // restCommandHandler.registerCommand("calibrate", HTTP_GET, doCalibrate);
-  // restCommandHandler.registerCommand("run", HTTP_GET, doRun);
-  // // restCommandHandler.registerCommand("target", HTTP_GET, {"target"}, doTarget);
-  // restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
-  // restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
+  restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
+  restCommandHandler.registerCommand("calibrate", HTTP_GET, doCalibrate);
+  restCommandHandler.registerCommand("run", HTTP_GET, doRun);
+  restCommandHandler.registerCommand<int>("target", HTTP_GET, {"target"}, doTargetNormalized);
+  restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
+  restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
 }
 
 void loop() {
-  ws.loop(); //TODO pendant la reconnexion ça fout la merde.....
+  
   switch (appState) {
     case CALIBRATING_MANUALLY: {
       if (motor.enabled) {
@@ -279,5 +281,8 @@ void loop() {
   } else {
     sensor.update();
   }
+
+  ws.loop(); //TODO pendant la reconnexion ça fout la merde.....
   serialCommandHandler.handleSerial();
+  restCommandHandler.handleClient();
 }
