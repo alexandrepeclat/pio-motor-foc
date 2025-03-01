@@ -20,6 +20,7 @@ enum AppState {
 WebSocketsClient ws;
 AsyncWebServer server(80);
 AsyncCorsMiddleware cors;
+AsyncWebSocket wsserver("/angle");
 SerialCommandHandler serialCommandHandler;
 RestCommandHandler restCommandHandler(server);
 MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
@@ -97,6 +98,25 @@ struct Command {
   int value;
   int interval;
 };
+
+const float NOTIFICATTION_CHANGE_PERCENTAGE = 0.005f;  // 1% de changement d'angle pour envoyer une notification
+
+void notifyAngleChange() {
+  static unsigned long lastNotification = 0;
+  if (millis() - lastNotification < 100) {  // Limiter les notifications à 10 Hz
+    return;
+  }
+  lastNotification = millis();
+  static float lastAngle = -1;
+  float currentAngle = sensor.getAngle();
+  float threshold = abs(minAngle - maxAngle) * NOTIFICATTION_CHANGE_PERCENTAGE;
+  if (abs(currentAngle - lastAngle) > threshold) {  // Seulement envoyer si l'angle a changé de plus de 0.01 degré
+    int angleNormalized = mapFloat(currentAngle, minAngle, maxAngle, CMD_MIN, CMD_MAX);
+    int angleNormalizedRounded = round(angleNormalized);
+    wsserver.textAll(String(angleNormalizedRounded));
+    lastAngle = currentAngle;
+  }
+}
 
 Command parseCommand(const String& input) {
   // Expression régulière pour extraire les données
@@ -188,7 +208,7 @@ void WebSocketTask(void* parameter) {
 
   cors.setOrigin("*");
   server.addMiddleware(&cors);
-  //server.addHandler(&ws);
+  server.addHandler(&wsserver);
   server.begin();
   Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT"); //TODO charger port depuis settings ? virer du constructeur
 
@@ -315,4 +335,5 @@ void loop() {
 
   serialCommandHandler.handleSerial();
   restCommandHandler.handleClient();
+  notifyAngleChange();
 }
