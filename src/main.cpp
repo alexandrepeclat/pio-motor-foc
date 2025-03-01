@@ -250,7 +250,7 @@ void setup() {
   serialCommandHandler.registerCommand("calibrate", doCalibrate);
   serialCommandHandler.registerCommand("r", doRun);
   serialCommandHandler.registerCommand("run", doRun);
-  serialCommandHandler.registerCommand<int>("target", {"target"}, doTargetNormalized);
+  serialCommandHandler.registerCommand<int>("target", {"angle"}, doTargetNormalized);
   serialCommandHandler.registerCommand("debug", doGetDebug);
   serialCommandHandler.registerCommand("help", doGetSerialCommands);
 
@@ -258,7 +258,7 @@ void setup() {
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
   restCommandHandler.registerCommand("calibrate", HTTP_GET, doCalibrate);
   restCommandHandler.registerCommand("run", HTTP_GET, doRun);
-  restCommandHandler.registerCommand<int>("target", HTTP_POST, {"target"}, doTargetNormalized);
+  restCommandHandler.registerCommand<int>("target", HTTP_POST, {"angle"}, doTargetNormalized);
   restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
   restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
 }
