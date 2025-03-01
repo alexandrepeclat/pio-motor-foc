@@ -2,14 +2,14 @@
 //  * ESP32 position motion control example with magnetic sensor
 //  */
 #include <Arduino.h>
+#include <ESPAsyncWebServer.h>
+#include <RestCommandHandler.h>
+#include <SerialCommandHandler.h>
 #include <SimpleFOC.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
 #include <secrets.h>
 #include <limits>
-#include <ESPAsyncWebServer.h>
-#include <SerialCommandHandler.h>
-#include <RestCommandHandler.h>
 
 enum AppState {
   CALIBRATING_MANUALLY,
@@ -87,7 +87,7 @@ String doCalibrate() {
   appState = AppState::CALIBRATING_MANUALLY;
   minAngle = std::numeric_limits<float>::max();  // Valeur initiale très haute
   maxAngle = std::numeric_limits<float>::min();  // Valeur initiale très basse
-  return "Calibration started " + String(motor.target);
+  return "CALIBRATING_MANUALLY | Target angle:" + String(target_angle) + " Sensor angle:" + String(sensor.getAngle());
 }
 
 // Fonction pour analyser la commande reçue
@@ -174,22 +174,45 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
-void setup() {
-  Serial.begin(115200);
-  Serial.setTimeout(10);
+TaskHandle_t WebSocketTaskHandle;
+
+void WebSocketTask(void* parameter) {
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.println("Connecting to WiFi...");
   }
-  Serial.println("Connected to WiFi!");
+  Serial.println("Connected to WiFi!" + WiFi.localIP().toString());
   delay(1000);
 
-  // Initialisation du serveur WebSocket
+  Serial.println("Connexion au WebSocket...");
   ws.begin("192.168.0.173", 1234, "/");  // PC
-  //ws.begin("192.168.0.204", 54817, "/"); //HyperV
+  // ws.begin("192.168.0.204", 54817, "/"); //HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
+
+  while (1) {
+    ws.loop();
+    vTaskDelay(10 / portTICK_PERIOD_MS);  // Évite de surcharger le CPU
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.setTimeout(10);
+  
+
+  // Initialisation du serveur WebSocket
+  xTaskCreatePinnedToCore(
+      WebSocketTask,         // Fonction de la tâche
+      "WebSocketTask",       // Nom de la tâche
+      10000,                 // Taille de la pile (10k)
+      NULL,                  // Paramètre (aucun ici)
+      1,                     // Priorité (1 = normale)
+      &WebSocketTaskHandle,  // Handle pour la gestion de la tâche
+      0                      // Boucle principale tourne sur core 1
+  );
 
   // SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
   // motor.useMonitoring(Serial);
@@ -233,7 +256,7 @@ void setup() {
 }
 
 void loop() {
-  
+
   switch (appState) {
     case CALIBRATING_MANUALLY: {
       if (motor.enabled) {
@@ -257,7 +280,7 @@ void loop() {
       if (!motor.enabled) {
         motor.enable();
       }
-      motor.voltage_limit = 6;    // maximal voltage to be set to the motor
+      motor.voltage_limit = 6;              // maximal voltage to be set to the motor
       motor.velocity_limit = MAX_VELOCITY;  // maximal velocity of the position control
       break;
     }
@@ -282,7 +305,6 @@ void loop() {
     sensor.update();
   }
 
-  ws.loop(); //TODO pendant la reconnexion ça fout la merde.....
   serialCommandHandler.handleSerial();
   restCommandHandler.handleClient();
 }
