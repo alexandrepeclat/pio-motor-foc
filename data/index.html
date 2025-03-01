@@ -19,7 +19,8 @@
         <h2>Target</h2>
         <label for="angleSlider">Set Angle:</label>
         <input type="range" id="angleSlider" name="angleSlider" min="0" max="100" oninput="setAngle(this.value)">
-        <input type="range" id="feedbackSlider" name="feedbackSlider" min="0" max="100" readonly>
+        <input type="range" id="feedbackSlider" name="feedbackSlider" min="0" max="100"
+            oninput="adjustGain(this.value)">
 
         <pre id="responseMessage" style="white-space:wrap;word-break:break-word;"></pre>
     </div>
@@ -29,22 +30,23 @@
         const REST_BASE_URL = 'http://192.168.0.238';
 
         const ws = new WebSocket(WS_BASE_URL);
-            ws.onmessage = (event) => {
-                const angle = event.data;
-                document.getElementById('feedbackSlider').value = angle;
-            };
+        ws.onmessage = (event) => {
+            const angle = event.data;
+            document.getElementById('feedbackSlider').value = angle;
+            adjustGain(angle);
+        };
 
-            ws.onopen = () => {
-                console.log('WebSocket connection established');
-            };
+        ws.onopen = () => {
+            console.log('WebSocket connection established');
+        };
 
-            ws.onclose = () => {
-                console.log('WebSocket connection closed');
-            };
+        ws.onclose = () => {
+            console.log('WebSocket connection closed');
+        };
 
-            ws.onerror = (error) => {
-                console.error('WebSocket error', error);
-            };
+        ws.onerror = (error) => {
+            console.error('WebSocket error', error);
+        };
 
 
         async function apiRequest(endpoint, method = 'GET', params = {}) {
@@ -96,6 +98,160 @@
             apiRequest('/target', 'POST', { angle });
         }
     </script>
+
+    <h2>Sound feedback</h2>
+    <div id="controls">
+        <div class="control-container">
+            <button id="start-button">Start</button>
+            <button id="test-button">TEST</button>
+            <label for="sound-toggle">Enable Sound:</label>
+            <input id="sound-toggle" type="checkbox" checked />
+            <label for="audio-output">Audio Output:</label>
+            <select id="audio-output" style="max-width:190px;"></select>
+            <div class="control-container">
+                <label for="frequency-slider">Frequency (Hz):</label>
+                <input id="frequency-slider" type="range" min="50" max="2000" step="1" value="261" />
+                <span id="frequency-value">261</span>
+            </div>
+            <div class="control-container">
+                <label for="gain-multiplier-slider">Gain Multiplier:</label>
+                <input id="gain-multiplier-slider" type="range" min="0" max="1" step="0.1" value="1" />
+                <span id="gain-multiplier-value">1.00</span>
+            </div>
+        </div>
+        <script type="text/javascript">
+
+
+            const startButton = document.getElementById('start-button');
+            const testButton = document.getElementById('test-button');
+            const soundToggle = document.getElementById('sound-toggle');
+            const frequencySlider = document.getElementById('frequency-slider');
+            const frequencyValue = document.getElementById('frequency-value');
+            const gainMultiplierSlider = document.getElementById('gain-multiplier-slider');
+            const gainMultiplierValue = document.getElementById('gain-multiplier-value');
+            const audioOutputSelect = document.getElementById('audio-output');
+
+            let audioOutputElement;
+            let audioContext;
+            let oscillator;
+            let gainNode;
+            let pannerNode;
+
+
+            function startAudio() {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioStreamDestination = audioContext.createMediaStreamDestination();
+                audioOutputElement = new Audio();
+                audioOutputElement.srcObject = audioStreamDestination.stream;
+                audioOutputElement.play();
+                const selectedDeviceId = audioOutputSelect.value;
+                setAudioOutput(selectedDeviceId);
+
+                gainNode = audioContext.createGain();
+                gainNode.gain.value = 0;
+
+                pannerNode = audioContext.createStereoPanner();
+                gainNode.connect(pannerNode);
+                pannerNode.connect(audioStreamDestination);
+
+                oscillator = audioContext.createOscillator();
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(frequencySlider.value, audioContext.currentTime); //440 la //261 c4
+                oscillator.connect(gainNode);
+                oscillator.start();
+            }
+
+            function setAudioOutput(deviceId) {
+                if (audioOutputElement && audioOutputElement.setSinkId) {
+                    audioOutputElement.setSinkId(deviceId)
+                        .then(() => console.log(`Audio output set to device: ${deviceId}`))
+                        .catch(err => console.error('Error setting audio output:', err));
+                } else {
+                    console.error('setSinkId is not supported in this browser.');
+                }
+            }
+
+            async function populateAudioDevices() {
+                const savedDeviceId = localStorage.getItem('audioOutputDeviceId'); // Charger depuis localStorage
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
+
+                audioOutputSelect.innerHTML = ''; // Réinitialise les options
+                audioOutputs.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.textContent = device.label || `Output Device ${audioOutputSelect.length + 1}`;
+                    if (device.deviceId === savedDeviceId) {
+                        option.selected = true;
+
+                    }
+                    audioOutputSelect.appendChild(option);
+                });
+            }
+
+            audioOutputSelect.addEventListener('change', (e) => {
+                const selectedDeviceId = audioOutputSelect.value;
+                localStorage.setItem('audioOutputDeviceId', selectedDeviceId); // Stocker l'ID sélectionné
+                setAudioOutput(e.target.value);
+            });
+
+            populateAudioDevices();
+
+            function adjustGain(speed) {
+                if (!soundToggle.checked) {
+                    gainNode.gain.setTargetAtTime(0, audioContext.currentTime, 0.01); // Coupe le son si la case est décochée
+                    return;
+                }
+
+                const gainMultiplier = parseFloat(gainMultiplierSlider.value); // Récupère la valeur du slider multiplicateur
+
+                // PANNER------
+                const adjustedGain = gainMultiplier;
+                gainNode.gain.setValueAtTime(adjustedGain, audioContext.currentTime);
+                const panning = map(speed, 0, 100, -0.9, 0.9); // -0.9 (left) to 0.9 (right)
+                pannerNode.pan.setValueAtTime(panning, audioContext.currentTime);
+                // PANNER------
+            }
+
+            function map(input, inMin, inMax, outMin, outMax) {
+                return ((input - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
+            }
+
+            startButton.addEventListener('click', () => {
+                startAudio();
+                startButton.style.display = 'none';
+            });
+
+            testButton.addEventListener('mousedown', () => {
+                testing = true;
+                adjustGain(100);
+            });
+
+            testButton.addEventListener('mouseup', () => {
+                testing = false;
+                adjustGain(0);
+            });
+
+            soundToggle.addEventListener('change', () => {
+                if (soundToggle.checked) {
+                    gainNode.gain.setTargetAtTime(0, audioContext.currentTime, 0.01); // Permet une montée douce
+                } else {
+                    gainNode.gain.setTargetAtTime(0, audioContext.currentTime, 0.01); // Coupe le son immédiatement
+                }
+            });
+
+            gainMultiplierSlider.addEventListener('input', () => {
+                gainMultiplierValue.textContent = parseFloat(gainMultiplierSlider.value).toFixed(2);
+            });
+
+            frequencySlider.addEventListener('input', () => {
+                const frequency = parseFloat(frequencySlider.value);
+                frequencyValue.textContent = frequency;
+                if (oscillator) {
+                    oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+                }
+            });
+        </script>
 </body>
 
 </html>
