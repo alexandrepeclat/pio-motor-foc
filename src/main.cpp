@@ -80,7 +80,7 @@ String doStop() {
 
 String doRun() {
   appState = AppState::RUNNING;
-  return "RUNNING";
+  return "RUNNING | Min angle: " + String(minAngle) + " Max angle: " + String(maxAngle) + " Current angle: " + String(sensor.getAngle()) + " Target angle: " + String(target_angle);
 }
 
 String doCalibrate() {
@@ -183,8 +183,14 @@ void WebSocketTask(void* parameter) {
     delay(1000);
     Serial.println("Connecting to WiFi...");
   }
-  Serial.println("Connected to WiFi!" + WiFi.localIP().toString());
+  Serial.println("Connected to WiFi! " + WiFi.localIP().toString());
   delay(1000);
+
+  cors.setOrigin("*");
+  server.addMiddleware(&cors);
+  //server.addHandler(&ws);
+  server.begin();
+  Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT"); //TODO charger port depuis settings ? virer du constructeur
 
   Serial.println("Connexion au WebSocket...");
   ws.begin("192.168.0.173", 1234, "/");  // PC
@@ -213,6 +219,8 @@ void setup() {
       &WebSocketTaskHandle,  // Handle pour la gestion de la tâche
       0                      // Boucle principale tourne sur core 1
   );
+
+  
 
   // SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
   // motor.useMonitoring(Serial);
@@ -250,7 +258,7 @@ void setup() {
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
   restCommandHandler.registerCommand("calibrate", HTTP_GET, doCalibrate);
   restCommandHandler.registerCommand("run", HTTP_GET, doRun);
-  restCommandHandler.registerCommand<int>("target", HTTP_GET, {"target"}, doTargetNormalized);
+  restCommandHandler.registerCommand<int>("target", HTTP_POST, {"target"}, doTargetNormalized);
   restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
   restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
 }

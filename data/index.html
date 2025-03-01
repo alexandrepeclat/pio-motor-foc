@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PIO FOC controller</title>
+</head>
+
+<body>
+    <div class="container">
+        <h1>FOC controller</h1>
+        <h2>Actions</h2>
+        <button onclick="calibrate()">Calibrate</button>
+        <button onclick="stop()">Stop</button>
+        <button onclick="getDebug()">Get debug</button>
+        <button onclick="run()">Run</button>
+
+        <pre id="responseMessage" style="white-space:wrap;word-break:break-word;"></pre>
+    </div>
+
+    <script>
+        //const WS_BASE_URL = 'ws://192.168.0.238/'
+        const REST_BASE_URL = 'http://192.168.0.238';
+
+        async function apiRequest(endpoint, method = 'GET', params = {}) {
+            let url = `${REST_BASE_URL}${endpoint}`;
+
+            if (method === 'GET' && Object.keys(params).length) {
+                url += '?' + new URLSearchParams(params);
+            }
+
+            const options = {
+                method,
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+            };
+
+            if (method === 'POST') {
+                options.body = new URLSearchParams(params);
+            }
+
+            try {
+                const response = await fetch(url, options);
+                const data = await response.text();
+                document.getElementById('responseMessage').textContent = `Response: ${data}`;
+                return data;
+            } catch (error) {
+                document.getElementById('responseMessage').textContent = `Error: ${error.message}`;
+                console.error(error);
+            }
+        }
+
+        function calibrate() {
+            apiRequest('/calibrate');
+        }
+
+        function stop() {
+            apiRequest('/stop');
+        }
+
+        function getDebug() {
+            apiRequest('/debug');
+        }
+
+        function run() {
+            apiRequest('/run');
+        }
+    </script>
+</body>
+
+</html>
