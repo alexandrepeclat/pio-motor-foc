@@ -24,6 +24,11 @@ AsyncWebSocket wsserver("/angle");
 SerialCommandHandler serialCommandHandler;
 RestCommandHandler restCommandHandler(server);
 MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
+
+//TODO https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/as5048a
+//TODO loop foc dans tâches prioritaire
+//TODO voir fréquences PWM https://docs.simplefoc.com/bldcdriver3pwm + toutes sorties sur même timer
+
 BLDCMotor motor = BLDCMotor(11);
 BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable pin
 
@@ -32,7 +37,7 @@ float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
 float target_angle = 0;
 
-const int MAX_VELOCITY = 20;
+const int MAX_VELOCITY = 80;
 const int CMD_MIN = 0;
 const int CMD_MAX = 100;
 
@@ -169,7 +174,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
   Serial.println();
   if (type == WStype_TEXT) {
     String input = String((char*)payload);
-    // Serial.println("Command received: " + input);
+    Serial.println("Command received: " + input);
     Command cmd = parseCommand(input);
     executeCommand(cmd);
   } else if (type == WStype_BIN) {
@@ -197,7 +202,6 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 TaskHandle_t WebSocketTaskHandle;
 
 void WebSocketTask(void* parameter) {
-
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -210,11 +214,11 @@ void WebSocketTask(void* parameter) {
   server.addMiddleware(&cors);
   server.addHandler(&wsserver);
   server.begin();
-  Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT"); //TODO charger port depuis settings ? virer du constructeur
+  Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT");  // TODO charger port depuis settings ? virer du constructeur
 
   Serial.println("Connexion au WebSocket...");
-  ws.begin("192.168.0.173", 1234, "/");  // PC
-  // ws.begin("192.168.0.204", 54817, "/"); //HyperV
+  // ws.begin("192.168.0.173", 1234, "/");  // PC
+  ws.begin("192.168.0.204", 54817, "/");  // HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
@@ -224,10 +228,12 @@ void WebSocketTask(void* parameter) {
   }
 }
 
+unsigned long loopDelay = 0;
+float motorVoltageLimit = 12;
+
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(10);
-  
 
   // Initialisation du serveur WebSocket
   xTaskCreatePinnedToCore(
@@ -239,8 +245,6 @@ void setup() {
       &WebSocketTaskHandle,  // Handle pour la gestion de la tâche
       0                      // Boucle principale tourne sur core 1
   );
-
-  
 
   // SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
   // motor.useMonitoring(Serial);
@@ -257,7 +261,9 @@ void setup() {
   motor.PID_velocity.D = 0;
   motor.LPF_velocity.Tf = 0.01;  // velocity low pass filtering time constant  - the lower the less filtered
   motor.P_angle.P = 20;          // angle P controller https://docs.simplefoc.com/angle_loop
-
+  // motor.current_limit = 2; // Amps - default 0.2Amps
+//Devrait atteindre 567rpm et 60rad/s en théorie
+// 20V et 1,5A max d'après specs
   motor.linkSensor(&sensor);
   motor.linkDriver(&driver);
   motor.init();     // initialize motor
@@ -273,6 +279,30 @@ void setup() {
   serialCommandHandler.registerCommand<int>("target", {"angle"}, doTargetNormalized);
   serialCommandHandler.registerCommand("debug", doGetDebug);
   serialCommandHandler.registerCommand("help", doGetSerialCommands);
+  serialCommandHandler.registerCommand("fake", [] { minAngle = -3*PI; maxAngle = 3*PI; return "debug angles set to -3pi +3pi"; });
+
+  
+  serialCommandHandler.registerCommand<float>("mvl", {"v"}, [](float v) {
+    motorVoltageLimit = v;
+    return "motor.voltage_limit.Tf=" + String(motorVoltageLimit);
+  });
+  serialCommandHandler.registerCommand<float>("tf", {"tf"}, [](float tf) {
+    motor.LPF_velocity.Tf = tf;
+    return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
+  });
+  serialCommandHandler.registerCommand<float, float, float>("vpid", {"p", "i", "d"}, [](float p, float i, float d) {
+    motor.PID_velocity.P = p;
+    motor.PID_velocity.I = i;
+    motor.PID_velocity.D = d;
+    return "motor.PID_velocity.P=" + String(motor.PID_velocity.P) + "motor.PID_velocity.I=" + String(motor.PID_velocity.I) + "motor.PID_velocity.D=" + String(motor.PID_velocity.D);
+  });
+  serialCommandHandler.registerCommand<float, float, float>("apid", {"p", "i", "d"}, [](float p, float i, float d) {
+    motor.P_angle.P = p;
+    motor.P_angle.I = i;
+    motor.P_angle.D = d;
+    return "motor.P_angle.P=" + String(motor.P_angle.P) + "motor.P_angle.I=" + String(motor.P_angle.I) + "motor.P_angle.D=" + String(motor.P_angle.D);
+  });
+  serialCommandHandler.registerCommand<int>("delay", {"delay"}, [](float d) { loopDelay = d; return "delay set " + loopDelay; });
 
   // Register REST API routes
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
@@ -284,6 +314,7 @@ void setup() {
 }
 
 void loop() {
+  delay(loopDelay);
 
   switch (appState) {
     case CALIBRATING_MANUALLY: {
@@ -308,7 +339,7 @@ void loop() {
       if (!motor.enabled) {
         motor.enable();
       }
-      motor.voltage_limit = 6;              // maximal voltage to be set to the motor
+      motor.voltage_limit = motorVoltageLimit;             // maximal voltage to be set to the motor
       motor.velocity_limit = MAX_VELOCITY;  // maximal velocity of the position control
       break;
     }
