@@ -1,15 +1,19 @@
 // /**
 //  * ESP32 position motion control example with magnetic sensor
 //  */
+#include <DebugBuilder.h>
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 #include <RestCommandHandler.h>
 #include <SerialCommandHandler.h>
 #include <SimpleFOC.h>
+#include <encoders/as5048a/MagneticSensorAS5048A.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
 #include <secrets.h>
 #include <limits>
+
+const int PIN_SENSOR_CS = 5;
 
 enum AppState {
   CALIBRATING_MANUALLY,
@@ -23,7 +27,8 @@ AsyncCorsMiddleware cors;
 AsyncWebSocket wsserver("/angle");
 SerialCommandHandler serialCommandHandler;
 RestCommandHandler restCommandHandler(server);
-MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
+//MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, PIN_SENSOR_CS);
+MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true); 
 
 //TODO https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/as5048a
 //TODO loop foc dans tâches prioritaire
@@ -36,6 +41,8 @@ float minAngle = std::numeric_limits<float>::max();
 float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
 float target_angle = 0;
+
+float motorVoltageLimit = 20;
 
 const int MAX_VELOCITY = 80;
 const int CMD_MIN = 0;
@@ -199,7 +206,56 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
+std::vector<DebugField> debugFields = {
+  {"angle", true, [] { return sensor.getAngle(); }},
+  {"target", true, [] { return target_angle; }},
+  {"state", true, [] { return appState; }},
+  {"minAngle", true, [] { return minAngle; }},
+  {"maxAngle", true, [] { return maxAngle; }},
+  {"velocity", false, [] { return motor.shaft_velocity; }},
+  {"voltageQ", false, [] { return motor.voltage.q; }},
+  // {"voltageD", false, [] { return motor.voltage.d; }},
+  // {"currentQ", false, [] { return motor.current.q; }},
+  // {"currentD", false, [] { return motor.current.d; }},
+  {"voltageLimit", true, [] { return motor.voltage_limit; }},
+  {"velocityLimit", true, [] { return motor.velocity_limit; }},
+  {"calibrated", true, [] { return isCalibrated(); }},
+  {"wsClients", true, [] { return wsserver.count(); }},
+  // {"motorVoltageLimit", true, [] { return motorVoltageLimit; }},
+  // {"driverVoltage", true, [] { return driver.voltage_power_supply; }},
+  // {"motorEnabled", true, [] { return motor.enabled; }},
+  // {"motorShaftAngle", false, [] { return motor.shaft_angle; }},
+  // {"motorShaftVelocity", false, [] { return motor.shaft_velocity; }},
+  // {"motorTargetAngle", false, [] { return motor.target; }},
+  // {"motorCurrentLimit", false, [] { return motor.current_limit; }},
+  // {"motorPhaseResistance", false, [] { return motor.phase_resistance; }},
+  // {"motorPhaseInductance", false, [] { return motor.phase_inductance; }},
+  // {"motorKV", false, [] { return motor.KV_rating; }},
+  // {"motorFOCModulation", false, [] { return motor.foc_modulation; }},
+  // {"motorLPFVelocityTf", true, [] { return motor.LPF_velocity.Tf; }},
+  // {"motorPIDVelocityP", true, [] { return motor.PID_velocity.P; }},
+  // {"motorPIDVelocityI", true, [] { return motor.PID_velocity.I; }},
+  // {"motorPIDVelocityD", true, [] { return motor.PID_velocity.D; }},
+  // {"motorPAngleP", true, [] { return motor.P_angle.P; }},
+  // {"motorPAngleI", true, [] { return motor.P_angle.I; }},
+  // {"motorPAngleD", true, [] { return motor.P_angle.D; }}
+};
+DebugBuilder debugBuilder(debugFields);
+
 TaskHandle_t WebSocketTaskHandle;
+TaskHandle_t SecondaryTaskHandle;
+
+void SecondaryTask(void* parameter) {
+  while (1) {
+    serialCommandHandler.handleSerial();
+    restCommandHandler.handleClient();
+    notifyAngleChange();
+    if (debugBuilder.hasChanged()) {  // 110 us
+      Serial.println(debugBuilder.buildJson());
+    }
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+}
 
 void WebSocketTask(void* parameter) {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -217,8 +273,8 @@ void WebSocketTask(void* parameter) {
   Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT");  // TODO charger port depuis settings ? virer du constructeur
 
   Serial.println("Connexion au WebSocket...");
-  // ws.begin("192.168.0.173", 1234, "/");  // PC
-  ws.begin("192.168.0.204", 54817, "/");  // HyperV
+   ws.begin("192.168.0.173", 1234, "/");  // PC
+ // ws.begin("192.168.0.204", 54817, "/");  // HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
@@ -228,12 +284,9 @@ void WebSocketTask(void* parameter) {
   }
 }
 
-unsigned long loopDelay = 0;
-float motorVoltageLimit = 12;
-
 void setup() {
   Serial.begin(115200);
-  Serial.setTimeout(10);
+  Serial.setTimeout(2);
 
   // Initialisation du serveur WebSocket
   xTaskCreatePinnedToCore(
@@ -246,12 +299,22 @@ void setup() {
       0                      // Boucle principale tourne sur core 1
   );
 
+  xTaskCreatePinnedToCore(
+    SecondaryTask,         // Fonction de la tâche
+    "SecondaryTask",       // Nom de la tâche
+    10000,                 // Taille de la pile (10k)
+    NULL,                  // Paramètre (aucun ici)
+    1,                     // Priorité (1 = normale)
+    &SecondaryTaskHandle,  // Handle pour la gestion de la tâche
+    0                      // Boucle principale tourne sur core 1
+);
+
   // SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
   // motor.useMonitoring(Serial);
 
   sensor.init();
 
-  driver.voltage_power_supply = 12;  // power supply voltage [V]
+  driver.voltage_power_supply = 20;  // power supply voltage [V]
   driver.init();
 
   motor.foc_modulation = FOCModulationType::SpaceVectorPWM;  // choose FOC modulation (optional)
@@ -302,7 +365,6 @@ void setup() {
     motor.P_angle.D = d;
     return "motor.P_angle.P=" + String(motor.P_angle.P) + "motor.P_angle.I=" + String(motor.P_angle.I) + "motor.P_angle.D=" + String(motor.P_angle.D);
   });
-  serialCommandHandler.registerCommand<int>("delay", {"delay"}, [](float d) { loopDelay = d; return "delay set " + loopDelay; });
 
   // Register REST API routes
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
@@ -314,7 +376,6 @@ void setup() {
 }
 
 void loop() {
-  delay(loopDelay);
 
   switch (appState) {
     case CALIBRATING_MANUALLY: {
@@ -364,7 +425,5 @@ void loop() {
     sensor.update();
   }
 
-  serialCommandHandler.handleSerial();
-  restCommandHandler.handleClient();
-  notifyAngleChange();
+ 
 }
