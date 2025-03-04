@@ -32,7 +32,7 @@ MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true);
 
 //TODO https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/as5048a
 //TODO loop foc dans tâches prioritaire
-//TODO voir fréquences PWM https://docs.simplefoc.com/bldcdriver3pwm + toutes sorties sur même timer
+//TODO voir fréquences PWM https://docs.simplefoc.com/bldcdriver3pwm + toutes sorties sur même timer + s'assurer d'avoir MCPWM https://docs.simplefoc.com/choosing_pwm_pins#esp32-boards
 
 BLDCMotor motor = BLDCMotor(11);
 BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable pin
@@ -309,20 +309,21 @@ void setup() {
     0                      // Boucle principale tourne sur core 1
 );
 
-  // SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
-  // motor.useMonitoring(Serial);
+  //SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
+   //motor.useMonitoring(Serial);
 
   sensor.init();
 
   driver.voltage_power_supply = 20;  // power supply voltage [V]
   driver.init();
 
+
   motor.foc_modulation = FOCModulationType::SpaceVectorPWM;  // choose FOC modulation (optional)
   motor.controller = MotionControlType::angle;               // set motion control loop to be used
   motor.PID_velocity.P = 0.2f;                               // velocity PI controller parameters
   motor.PID_velocity.I = 20;
   motor.PID_velocity.D = 0;
-  motor.LPF_velocity.Tf = 0.01;  // velocity low pass filtering time constant  - the lower the less filtered
+  motor.LPF_velocity.Tf = 0.01;  // default 0.01 velocity low pass filtering time constant  - the lower the less filtered
   motor.P_angle.P = 20;          // angle P controller https://docs.simplefoc.com/angle_loop
   // motor.current_limit = 2; // Amps - default 0.2Amps
 //Devrait atteindre 567rpm et 60rad/s en théorie
