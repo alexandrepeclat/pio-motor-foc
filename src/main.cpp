@@ -1,430 +1,58 @@
-// /**
-//  * ESP32 position motion control example with magnetic sensor
-//  */
-#include <DebugBuilder.h>
-#include <Arduino.h>
-#include <ESPAsyncWebServer.h>
-#include <RestCommandHandler.h>
-#include <SerialCommandHandler.h>
 #include <SimpleFOC.h>
 #include <encoders/as5048a/MagneticSensorAS5048A.h>
-#include <WebSocketsClient.h>
-#include <WiFi.h>
-#include <secrets.h>
-#include <limits>
-
 const int PIN_SENSOR_CS = 5;
-
-enum AppState {
-  CALIBRATING_MANUALLY,
-  RUNNING,
-  STOPPED
-};
-
-WebSocketsClient ws;
-AsyncWebServer server(80);
-AsyncCorsMiddleware cors;
-AsyncWebSocket wsserver("/angle");
-SerialCommandHandler serialCommandHandler;
-RestCommandHandler restCommandHandler(server);
-//MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, PIN_SENSOR_CS);
-MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true); 
-
-//TODO https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/as5048a
-//TODO loop foc dans tâches prioritaire
-//TODO voir fréquences PWM https://docs.simplefoc.com/bldcdriver3pwm + toutes sorties sur même timer + s'assurer d'avoir MCPWM https://docs.simplefoc.com/choosing_pwm_pins#esp32-boards
-
+MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true);
 BLDCMotor motor = BLDCMotor(11);
 BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable pin
 
-float minAngle = std::numeric_limits<float>::max();
-float maxAngle = std::numeric_limits<float>::min();
-AppState appState = AppState::STOPPED;
-float target_angle = 0;
-
-float motorVoltageLimit = 20;
-
-const int MAX_VELOCITY = 80;
-const int CMD_MIN = 0;
-const int CMD_MAX = 100;
-
-float mapFloat(float value, float inMin, float inMax, float outMin, float outMax) {
-  if (inMin == inMax)
-    return outMin;                         // Évite la division par zéro
-  value = constrain(value, inMin, inMax);  // Empêche l'extrapolation
-  return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
-}
-
-bool isCalibrated() {
-  return minAngle != std::numeric_limits<float>::max() && maxAngle != std::numeric_limits<float>::min();
-}
-
-String doTargetRaw(float angle) {
-  appState = AppState::RUNNING;
-  target_angle = angle;
-  return "Target raw: " + String(target_angle);
-}
-
-String doTargetNormalized(int angleNormalized) {
-  if (!isCalibrated()) {
-    return "Motor not calibrated yet";
-  }
-  appState = AppState::RUNNING;
-  target_angle = mapFloat(angleNormalized, 0, 100, minAngle, maxAngle);
-  return "Target normalized: " + String(angleNormalized) + " Target raw: " + String(target_angle);
-}
-
-String doGetRestRoutes() {
-  return restCommandHandler.getRoutesList();
-}
-
-String doGetSerialCommands() {
-  return serialCommandHandler.getCommandsList();
-}
-
-String doGetDebug() {
-  return "Min angle: " + String(minAngle) + " Max angle: " + String(maxAngle) + " Current angle: " + String(sensor.getAngle()) + " Target angle: " + String(target_angle) + " App state: " + String(appState);
-}
-
-String doStop() {
-  appState = AppState::STOPPED;
-  return "STOPPED";
-}
-
-String doRun() {
-  appState = AppState::RUNNING;
-  return "RUNNING | Min angle: " + String(minAngle) + " Max angle: " + String(maxAngle) + " Current angle: " + String(sensor.getAngle()) + " Target angle: " + String(target_angle);
-}
-
-String doCalibrate() {
-  appState = AppState::CALIBRATING_MANUALLY;
-  minAngle = std::numeric_limits<float>::max();  // Valeur initiale très haute
-  maxAngle = std::numeric_limits<float>::min();  // Valeur initiale très basse
-  return "CALIBRATING_MANUALLY | Target angle:" + String(target_angle) + " Sensor angle:" + String(sensor.getAngle());
-}
-
-// Fonction pour analyser la commande reçue
-struct Command {
-  char action;
-  int axis;
-  int value;
-  int interval;
-};
-
-const float NOTIFICATTION_CHANGE_PERCENTAGE = 0.005f;  // 1% de changement d'angle pour envoyer une notification
-
-void notifyAngleChange() {
-  static unsigned long lastNotification = 0;
-  if (millis() - lastNotification < 100) {  // Limiter les notifications à 10 Hz
-    return;
-  }
-  lastNotification = millis();
-  static float lastAngle = -1;
-  float currentAngle = sensor.getAngle();
-  float threshold = abs(minAngle - maxAngle) * NOTIFICATTION_CHANGE_PERCENTAGE;
-  if (abs(currentAngle - lastAngle) > threshold) {  // Seulement envoyer si l'angle a changé de plus de 0.01 degré
-    int angleNormalized = mapFloat(currentAngle, minAngle, maxAngle, CMD_MIN, CMD_MAX);
-    int angleNormalizedRounded = round(angleNormalized);
-    wsserver.textAll(String(angleNormalizedRounded));
-    lastAngle = currentAngle;
-  }
-}
-
-Command parseCommand(const String& input) {
-  // Expression régulière pour extraire les données
-  // Format attendu : [Action][Axis][Value][Type][Interval]
-  if (input.length() >= 7) {  // La commande doit être d'une longueur suffisante
-    Command cmd;
-    cmd.action = input.charAt(0);               // 'L'
-    cmd.axis = input.charAt(1) - '0';           // '0' -> 0
-    cmd.value = input.substring(2, 4).toInt();  // '50' -> 50
-    cmd.interval = input.substring(5).toInt();  // '5000' -> 5000
-    return cmd;
-  } else {
-    Command cmd = {'\0', -1, -1, -1};  // Valeurs par défaut pour une commande invalide
-    return cmd;
-  }
-}
-
-void executeCommand(Command cmd) {
-  if (!isCalibrated()) {
-    Serial.println("Command ignored: Motor not calibrated yet");
-    return;
-  }
-  if (appState != AppState::RUNNING) {
-    Serial.println("Command ignored: Motor not running");
-    return;
-  }
-  if (cmd.action == 'L' && cmd.axis == 0) {
-    float target_position = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle);
-    float current_position = sensor.getAngle();
-    float delta_angle = target_position - current_position;
-    float velocity = abs(delta_angle / (cmd.interval / 1000.0));
-    float target_angle_rounded = round(target_position * 100) / 100.0;
-    Serial.println("CMD: A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T(r): " + String(target_angle_rounded) + " C(s): " + String(current_position) + " C(m): " + String(motor.shaft_angle) + " D: " + String(delta_angle) + " V: " + String(velocity));
-
-    // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
-    if (velocity > MAX_VELOCITY) {
-      velocity = MAX_VELOCITY;
-    }
-
-    // Définir la vitesse et l'angle cible
-    noInterrupts();
-    target_angle = target_angle_rounded;
-    interrupts();
-    motor.velocity_limit = velocity;
-  }
-}
-
-// Fonction pour gérer les messages reçus via WebSocket
-void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
-  Serial.println();
-  if (type == WStype_TEXT) {
-    String input = String((char*)payload);
-    Serial.println("Command received: " + input);
-    Command cmd = parseCommand(input);
-    executeCommand(cmd);
-  } else if (type == WStype_BIN) {
-    // Traitement des données binaires (Blob)
-    // Serial.print("Received Binary Data:");
-    // for (size_t i = 0; i < length; i++) {
-    //   Serial.print(payload[i], HEX);
-    //   Serial.print(" ");
-    // }
-    // Serial.println();
-    String input = String((char*)payload);
-    // Serial.println("Command received: " + input);
-    Command cmd = parseCommand(input);
-    executeCommand(cmd);
-  } else if (type == WStype_CONNECTED) {
-    Serial.println("WebSocket connected");
-    ws.sendTXT("{ \"identifier\": \"myesp\", \"address\": \"00000000\", \"version\": 0 }");  // Envoie un message initial
-  } else if (type == WStype_DISCONNECTED) {
-    Serial.println("WebSocket disconnected");
-  } else if (type == WStype_ERROR) {
-    Serial.println("WebSocket error");
-  }
-}
-
-std::vector<DebugField> debugFields = {
-  {"angle", true, [] { return sensor.getAngle(); }},
-  {"target", true, [] { return target_angle; }},
-  {"state", true, [] { return appState; }},
-  {"minAngle", true, [] { return minAngle; }},
-  {"maxAngle", true, [] { return maxAngle; }},
-  {"velocity", false, [] { return motor.shaft_velocity; }},
-  {"voltageQ", false, [] { return motor.voltage.q; }},
-  // {"voltageD", false, [] { return motor.voltage.d; }},
-  // {"currentQ", false, [] { return motor.current.q; }},
-  // {"currentD", false, [] { return motor.current.d; }},
-  {"voltageLimit", true, [] { return motor.voltage_limit; }},
-  {"velocityLimit", true, [] { return motor.velocity_limit; }},
-  {"calibrated", true, [] { return isCalibrated(); }},
-  {"wsClients", true, [] { return wsserver.count(); }},
-  // {"motorVoltageLimit", true, [] { return motorVoltageLimit; }},
-  // {"driverVoltage", true, [] { return driver.voltage_power_supply; }},
-  // {"motorEnabled", true, [] { return motor.enabled; }},
-  // {"motorShaftAngle", false, [] { return motor.shaft_angle; }},
-  // {"motorShaftVelocity", false, [] { return motor.shaft_velocity; }},
-  // {"motorTargetAngle", false, [] { return motor.target; }},
-  // {"motorCurrentLimit", false, [] { return motor.current_limit; }},
-  // {"motorPhaseResistance", false, [] { return motor.phase_resistance; }},
-  // {"motorPhaseInductance", false, [] { return motor.phase_inductance; }},
-  // {"motorKV", false, [] { return motor.KV_rating; }},
-  // {"motorFOCModulation", false, [] { return motor.foc_modulation; }},
-  // {"motorLPFVelocityTf", true, [] { return motor.LPF_velocity.Tf; }},
-  // {"motorPIDVelocityP", true, [] { return motor.PID_velocity.P; }},
-  // {"motorPIDVelocityI", true, [] { return motor.PID_velocity.I; }},
-  // {"motorPIDVelocityD", true, [] { return motor.PID_velocity.D; }},
-  // {"motorPAngleP", true, [] { return motor.P_angle.P; }},
-  // {"motorPAngleI", true, [] { return motor.P_angle.I; }},
-  // {"motorPAngleD", true, [] { return motor.P_angle.D; }}
-};
-DebugBuilder debugBuilder(debugFields);
-
-TaskHandle_t WebSocketTaskHandle;
-TaskHandle_t SecondaryTaskHandle;
-
-void SecondaryTask(void* parameter) {
-  while (1) {
-    serialCommandHandler.handleSerial();
-    restCommandHandler.handleClient();
-    notifyAngleChange();
-    if (debugBuilder.hasChanged()) {  // 110 us
-      Serial.println(debugBuilder.buildJson());
-    }
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-  }
-}
-
-void WebSocketTask(void* parameter) {
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
-  }
-  Serial.println("Connected to WiFi! " + WiFi.localIP().toString());
-  delay(1000);
-
-  cors.setOrigin("*");
-  server.addMiddleware(&cors);
-  server.addHandler(&wsserver);
-  server.begin();
-  Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT");  // TODO charger port depuis settings ? virer du constructeur
-
-  Serial.println("Connexion au WebSocket...");
-   ws.begin("192.168.0.173", 1234, "/");  // PC
- // ws.begin("192.168.0.204", 54817, "/");  // HyperV
-  ws.onEvent(onWsEvent);
-  ws.setReconnectInterval(5000);
-
-  while (1) {
-    ws.loop();
-    vTaskDelay(10 / portTICK_PERIOD_MS);  // Évite de surcharger le CPU
-  }
+// include commander interface
+Commander command = Commander(Serial);
+void doMotor(char* cmd) {
+  command.motor(&motor, cmd);
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial.setTimeout(2);
 
-  // Initialisation du serveur WebSocket
-  xTaskCreatePinnedToCore(
-      WebSocketTask,         // Fonction de la tâche
-      "WebSocketTask",       // Nom de la tâche
-      10000,                 // Taille de la pile (10k)
-      NULL,                  // Paramètre (aucun ici)
-      1,                     // Priorité (1 = normale)
-      &WebSocketTaskHandle,  // Handle pour la gestion de la tâche
-      0                      // Boucle principale tourne sur core 1
-  );
-
-  xTaskCreatePinnedToCore(
-    SecondaryTask,         // Fonction de la tâche
-    "SecondaryTask",       // Nom de la tâche
-    10000,                 // Taille de la pile (10k)
-    NULL,                  // Paramètre (aucun ici)
-    1,                     // Priorité (1 = normale)
-    &SecondaryTaskHandle,  // Handle pour la gestion de la tâche
-    0                      // Boucle principale tourne sur core 1
-);
-
-  //SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
-   //motor.useMonitoring(Serial);
-
+  ////////////////
   sensor.init();
 
   driver.voltage_power_supply = 20;  // power supply voltage [V]
   driver.init();
-
 
   motor.foc_modulation = FOCModulationType::SpaceVectorPWM;  // choose FOC modulation (optional)
   motor.controller = MotionControlType::angle;               // set motion control loop to be used
   motor.PID_velocity.P = 0.2f;                               // velocity PI controller parameters
   motor.PID_velocity.I = 20;
   motor.PID_velocity.D = 0;
-  motor.LPF_velocity.Tf = 0.01;  // default 0.01 velocity low pass filtering time constant  - the lower the less filtered
+  motor.LPF_velocity.Tf = 0.03;  // default 0.01 velocity low pass filtering time constant  - the lower the less filtered
   motor.P_angle.P = 20;          // angle P controller https://docs.simplefoc.com/angle_loop
+
   // motor.current_limit = 2; // Amps - default 0.2Amps
-//Devrait atteindre 567rpm et 60rad/s en théorie
-// 20V et 1,5A max d'après specs
+  // Devrait atteindre 567rpm et 60rad/s en théorie
+  //  20V et 1,5A max d'après specs
   motor.linkSensor(&sensor);
   motor.linkDriver(&driver);
   motor.init();     // initialize motor
   motor.initFOC();  // align sensor and start FOC // TODO deplacer ailleurs pour le lancer que sur demande à la calibration
 
-  // Register Serial commands
-  serialCommandHandler.registerCommand("s", doStop);
-  serialCommandHandler.registerCommand("stop", doStop);
-  serialCommandHandler.registerCommand("c", doCalibrate);
-  serialCommandHandler.registerCommand("calibrate", doCalibrate);
-  serialCommandHandler.registerCommand("r", doRun);
-  serialCommandHandler.registerCommand("run", doRun);
-  serialCommandHandler.registerCommand<int>("target", {"angle"}, doTargetNormalized);
-  serialCommandHandler.registerCommand("debug", doGetDebug);
-  serialCommandHandler.registerCommand("help", doGetSerialCommands);
-  serialCommandHandler.registerCommand("fake", [] { minAngle = -3*PI; maxAngle = 3*PI; return "debug angles set to -3pi +3pi"; });
+  ////////////////
+  // add the motor to the commander interface
+  // The letter id (here 'M') of the motor
+  char motor_id = 'M';
+  command.add(motor_id, doMotor, "motor");
+  // tell the motor to use the monitoring
+  motor.useMonitoring(Serial);
+  // configuring the monitoring to be well parsed by the webcontroller
 
-  
-  serialCommandHandler.registerCommand<float>("mvl", {"v"}, [](float v) {
-    motorVoltageLimit = v;
-    return "motor.voltage_limit.Tf=" + String(motorVoltageLimit);
-  });
-  serialCommandHandler.registerCommand<float>("tf", {"tf"}, [](float tf) {
-    motor.LPF_velocity.Tf = tf;
-    return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
-  });
-  serialCommandHandler.registerCommand<float, float, float>("vpid", {"p", "i", "d"}, [](float p, float i, float d) {
-    motor.PID_velocity.P = p;
-    motor.PID_velocity.I = i;
-    motor.PID_velocity.D = d;
-    return "motor.PID_velocity.P=" + String(motor.PID_velocity.P) + "motor.PID_velocity.I=" + String(motor.PID_velocity.I) + "motor.PID_velocity.D=" + String(motor.PID_velocity.D);
-  });
-  serialCommandHandler.registerCommand<float, float, float>("apid", {"p", "i", "d"}, [](float p, float i, float d) {
-    motor.P_angle.P = p;
-    motor.P_angle.I = i;
-    motor.P_angle.D = d;
-    return "motor.P_angle.P=" + String(motor.P_angle.P) + "motor.P_angle.I=" + String(motor.P_angle.I) + "motor.P_angle.D=" + String(motor.P_angle.D);
-  });
-
-  // Register REST API routes
-  restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
-  restCommandHandler.registerCommand("calibrate", HTTP_GET, doCalibrate);
-  restCommandHandler.registerCommand("run", HTTP_GET, doRun);
-  restCommandHandler.registerCommand<int>("target", HTTP_POST, {"angle"}, doTargetNormalized);
-  restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
-  restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
+  // command.verbose = VerboseMode::machine_readable;  // can be set using the webcontroller - optional
 }
-
 void loop() {
+  motor.loopFOC();
+  motor.move();  // Par exemple 2 rad/s, selon ton mode de contrôle
 
-  switch (appState) {
-    case CALIBRATING_MANUALLY: {
-      if (motor.enabled) {
-        motor.disable();
-      }
-      motor.voltage_limit = 0;
-      motor.velocity_limit = 0;
-      float currentAngle = sensor.getAngle();
-      target_angle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
-      if (currentAngle < minAngle) {
-        minAngle = currentAngle;
-        Serial.println("Min-max angles: " + String(minAngle) + " " + String(maxAngle));
-      }
-      if (currentAngle > maxAngle) {
-        maxAngle = currentAngle;
-        Serial.println("Min-max angles: " + String(minAngle) + " " + String(maxAngle));
-      }
-      break;
-    }
-    case RUNNING: {
-      if (!motor.enabled) {
-        motor.enable();
-      }
-      motor.voltage_limit = motorVoltageLimit;             // maximal voltage to be set to the motor
-      motor.velocity_limit = MAX_VELOCITY;  // maximal velocity of the position control
-      break;
-    }
-    case STOPPED: {
-      if (motor.enabled) {
-        motor.disable();
-      }
-      float currentAngle = sensor.getAngle();
-      target_angle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
-      motor.voltage_limit = 0;
-      motor.velocity_limit = 0;
-      break;
-    }
-  }
-
-  // main FOC algorithm function the faster you run this function the better //TODO à voir si loopFoc doit être fait avant les trucs dans le switch
-  // Even if motor is stopped, For updating sensors
-  if (motor.enabled) {
-    motor.loopFOC();
-    motor.move(target_angle);  // Motion control function velocity, position or voltage (defined in motor.controller) this function can be run at much lower frequency than loopFOC() function
-  } else {
-    sensor.update();
-  }
-
- 
+  // real-time monitoring calls
+  motor.monitor();
+  // real-time commander calls
+  command.run();
 }
