@@ -1,15 +1,15 @@
 // /**
 //  * ESP32 position motion control example with magnetic sensor
 //  */
-#include <DebugBuilder.h>
 #include <Arduino.h>
+#include <DebugBuilder.h>
 #include <ESPAsyncWebServer.h>
 #include <RestCommandHandler.h>
 #include <SerialCommandHandler.h>
 #include <SimpleFOC.h>
-#include <encoders/as5048a/MagneticSensorAS5048A.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
+#include <encoders/as5048a/MagneticSensorAS5048A.h>
 #include <secrets.h>
 #include <limits>
 
@@ -20,6 +20,9 @@ enum AppState {
   RUNNING,
   STOPPED
 };
+const int DEFAULT_MAX_VELOCITY = 80;
+const int CMD_MIN = 0;
+const int CMD_MAX = 100;
 
 WebSocketsClient ws;
 AsyncWebServer server(80);
@@ -27,12 +30,12 @@ AsyncCorsMiddleware cors;
 AsyncWebSocket wsserver("/angle");
 SerialCommandHandler serialCommandHandler;
 RestCommandHandler restCommandHandler(server);
-//MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, PIN_SENSOR_CS);
-MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true); 
+// MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, PIN_SENSOR_CS);
+MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true);
 
-//TODO https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/as5048a
-//TODO loop foc dans tâches prioritaire
-//TODO voir fréquences PWM https://docs.simplefoc.com/bldcdriver3pwm + toutes sorties sur même timer + s'assurer d'avoir MCPWM https://docs.simplefoc.com/choosing_pwm_pins#esp32-boards
+// TODO https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/as5048a
+// TODO loop foc dans tâches prioritaire
+// TODO voir fréquences PWM https://docs.simplefoc.com/bldcdriver3pwm + toutes sorties sur même timer + s'assurer d'avoir MCPWM https://docs.simplefoc.com/choosing_pwm_pins#esp32-boards
 
 BLDCMotor motor = BLDCMotor(11);
 BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable pin
@@ -40,13 +43,11 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable 
 float minAngle = std::numeric_limits<float>::max();
 float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
-float target_angle = 0;
+volatile float target_angle = 0;
 
 float motorVoltageLimit = 20;
+volatile float max_velocity = DEFAULT_MAX_VELOCITY;
 
-const int MAX_VELOCITY = 80;
-const int CMD_MIN = 0;
-const int CMD_MAX = 100;
 
 float mapFloat(float value, float inMin, float inMax, float outMin, float outMax) {
   if (inMin == inMax)
@@ -164,15 +165,15 @@ void executeCommand(Command cmd) {
     Serial.println("CMD: A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T(r): " + String(target_angle_rounded) + " C(s): " + String(current_position) + " C(m): " + String(motor.shaft_angle) + " D: " + String(delta_angle) + " V: " + String(velocity));
 
     // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
-    if (velocity > MAX_VELOCITY) {
-      velocity = MAX_VELOCITY;
+    if (velocity > DEFAULT_MAX_VELOCITY) {
+      velocity = DEFAULT_MAX_VELOCITY;
     }
 
     // Définir la vitesse et l'angle cible
     noInterrupts();
     target_angle = target_angle_rounded;
+    max_velocity = velocity;
     interrupts();
-    motor.velocity_limit = velocity;
   }
 }
 
@@ -207,38 +208,39 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 std::vector<DebugField> debugFields = {
-  {"angle", true, [] { return sensor.getAngle(); }},
-  {"target", true, [] { return target_angle; }},
-  {"state", true, [] { return appState; }},
-  {"minAngle", true, [] { return minAngle; }},
-  {"maxAngle", true, [] { return maxAngle; }},
-  {"velocity", false, [] { return motor.shaft_velocity; }},
-  {"voltageQ", false, [] { return motor.voltage.q; }},
-  // {"voltageD", false, [] { return motor.voltage.d; }},
-  // {"currentQ", false, [] { return motor.current.q; }},
-  // {"currentD", false, [] { return motor.current.d; }},
-  {"voltageLimit", true, [] { return motor.voltage_limit; }},
-  {"velocityLimit", true, [] { return motor.velocity_limit; }},
-  {"calibrated", true, [] { return isCalibrated(); }},
-  {"wsClients", true, [] { return wsserver.count(); }},
-  // {"motorVoltageLimit", true, [] { return motorVoltageLimit; }},
-  // {"driverVoltage", true, [] { return driver.voltage_power_supply; }},
-  // {"motorEnabled", true, [] { return motor.enabled; }},
-  // {"motorShaftAngle", false, [] { return motor.shaft_angle; }},
-  // {"motorShaftVelocity", false, [] { return motor.shaft_velocity; }},
-  // {"motorTargetAngle", false, [] { return motor.target; }},
-  // {"motorCurrentLimit", false, [] { return motor.current_limit; }},
-  // {"motorPhaseResistance", false, [] { return motor.phase_resistance; }},
-  // {"motorPhaseInductance", false, [] { return motor.phase_inductance; }},
-  // {"motorKV", false, [] { return motor.KV_rating; }},
-  // {"motorFOCModulation", false, [] { return motor.foc_modulation; }},
-  // {"motorLPFVelocityTf", true, [] { return motor.LPF_velocity.Tf; }},
-  // {"motorPIDVelocityP", true, [] { return motor.PID_velocity.P; }},
-  // {"motorPIDVelocityI", true, [] { return motor.PID_velocity.I; }},
-  // {"motorPIDVelocityD", true, [] { return motor.PID_velocity.D; }},
-  // {"motorPAngleP", true, [] { return motor.P_angle.P; }},
-  // {"motorPAngleI", true, [] { return motor.P_angle.I; }},
-  // {"motorPAngleD", true, [] { return motor.P_angle.D; }}
+    {"angle", true, [] { return sensor.getAngle(); }},
+    {"target", true, [] { return target_angle; }},
+    {"state", true, [] { return appState; }},
+    {"minAngle", true, [] { return minAngle; }},
+    {"maxAngle", true, [] { return maxAngle; }},
+    {"velocity", false, [] { return motor.shaft_velocity; }},
+    {"voltageQ", false, [] { return motor.voltage.q; }},
+    // {"voltageD", false, [] { return motor.voltage.d; }},
+    // {"currentQ", false, [] { return motor.current.q; }},
+    // {"currentD", false, [] { return motor.current.d; }},
+    {"voltageLimit", true, [] { return motor.voltage_limit; }},
+    {"velocityLimit", true, [] { return motor.velocity_limit; }},
+    {"velocityLimitVar", true, [] { return max_velocity; }},
+    {"calibrated", true, [] { return isCalibrated(); }},
+    {"wsClients", true, [] { return wsserver.count(); }},
+    // {"motorVoltageLimit", true, [] { return motorVoltageLimit; }},
+    // {"driverVoltage", true, [] { return driver.voltage_power_supply; }},
+    // {"motorEnabled", true, [] { return motor.enabled; }},
+    // {"motorShaftAngle", false, [] { return motor.shaft_angle; }},
+    // {"motorShaftVelocity", false, [] { return motor.shaft_velocity; }},
+    // {"motorTargetAngle", false, [] { return motor.target; }},
+    // {"motorCurrentLimit", false, [] { return motor.current_limit; }},
+    // {"motorPhaseResistance", false, [] { return motor.phase_resistance; }},
+    // {"motorPhaseInductance", false, [] { return motor.phase_inductance; }},
+    // {"motorKV", false, [] { return motor.KV_rating; }},
+    // {"motorFOCModulation", false, [] { return motor.foc_modulation; }},
+    // {"motorLPFVelocityTf", true, [] { return motor.LPF_velocity.Tf; }},
+    // {"motorPIDVelocityP", true, [] { return motor.PID_velocity.P; }},
+    // {"motorPIDVelocityI", true, [] { return motor.PID_velocity.I; }},
+    // {"motorPIDVelocityD", true, [] { return motor.PID_velocity.D; }},
+    // {"motorPAngleP", true, [] { return motor.P_angle.P; }},
+    // {"motorPAngleI", true, [] { return motor.P_angle.I; }},
+    // {"motorPAngleD", true, [] { return motor.P_angle.D; }}
 };
 DebugBuilder debugBuilder(debugFields);
 
@@ -273,8 +275,8 @@ void WebSocketTask(void* parameter) {
   Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT");  // TODO charger port depuis settings ? virer du constructeur
 
   Serial.println("Connexion au WebSocket...");
-   ws.begin("192.168.0.173", 1234, "/");  // PC
- // ws.begin("192.168.0.204", 54817, "/");  // HyperV
+  ws.begin("192.168.0.173", 1234, "/");  // PC
+                                         // ws.begin("192.168.0.204", 54817, "/");  // HyperV
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
@@ -300,34 +302,78 @@ void setup() {
   );
 
   xTaskCreatePinnedToCore(
-    SecondaryTask,         // Fonction de la tâche
-    "SecondaryTask",       // Nom de la tâche
-    10000,                 // Taille de la pile (10k)
-    NULL,                  // Paramètre (aucun ici)
-    1,                     // Priorité (1 = normale)
-    &SecondaryTaskHandle,  // Handle pour la gestion de la tâche
-    0                      // Boucle principale tourne sur core 1
-);
+      SecondaryTask,         // Fonction de la tâche
+      "SecondaryTask",       // Nom de la tâche
+      10000,                 // Taille de la pile (10k)
+      NULL,                  // Paramètre (aucun ici)
+      1,                     // Priorité (1 = normale)
+      &SecondaryTaskHandle,  // Handle pour la gestion de la tâche
+      0                      // Boucle principale tourne sur core 1
+  );
 
-  //SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
-   //motor.useMonitoring(Serial);
+  // SimpleFOCDebug::enable(&Serial);   // enable more verbose output for debugging
+  // motor.useMonitoring(Serial);
 
   sensor.init();
 
   driver.voltage_power_supply = 20;  // power supply voltage [V]
   driver.init();
 
-
+  // control loop type and torque mode
   motor.foc_modulation = FOCModulationType::SpaceVectorPWM;  // choose FOC modulation (optional)
-  motor.controller = MotionControlType::angle;               // set motion control loop to be used
-  motor.PID_velocity.P = 0.2f;                               // velocity PI controller parameters
-  motor.PID_velocity.I = 20;
-  motor.PID_velocity.D = 0;
-  motor.LPF_velocity.Tf = 0.01;  // default 0.01 velocity low pass filtering time constant  - the lower the less filtered
-  motor.P_angle.P = 20;          // angle P controller https://docs.simplefoc.com/angle_loop
-  // motor.current_limit = 2; // Amps - default 0.2Amps
-//Devrait atteindre 567rpm et 60rad/s en théorie
-// 20V et 1,5A max d'après specs
+  motor.torque_controller = TorqueControlType::voltage;
+  motor.controller = MotionControlType::angle;
+  // motor.motion_downsample = 0.0;
+
+  // velocity loop PID
+  motor.PID_velocity.P = 0.2;
+  motor.PID_velocity.I = 20.0;
+  motor.PID_velocity.D = 0.0;
+  // motor.PID_velocity.output_ramp = 1000.0;
+  // motor.PID_velocity.limit = 12.0;
+  // Low pass filtering time constant // default 0.01 - the lower the less filtered
+  motor.LPF_velocity.Tf = 0.01;
+  // angle loop PID
+  motor.P_angle.P = 20.0;  // angle P controller https://docs.simplefoc.com/angle_loop
+  // motor.P_angle.I = 0.0;
+  // motor.P_angle.D = 0.0;
+  // motor.P_angle.output_ramp = 0.0;
+  // motor.P_angle.limit = 20.0;
+  // Low pass filtering time constant
+  // motor.LPF_angle.Tf = 0.0;
+  // current q loop PID
+  // motor.PID_current_q.P = 3.0;
+  // motor.PID_current_q.I = 300.0;
+  // motor.PID_current_q.D = 0.0;
+  // motor.PID_current_q.output_ramp = 0.0;
+  // motor.PID_current_q.limit = 12.0;
+  // Low pass filtering time constant
+  // motor.LPF_current_q.Tf = 0.005;
+  // current d loop PID
+  // motor.PID_current_d.P = 3.0;
+  // motor.PID_current_d.I = 300.0;
+  // motor.PID_current_d.D = 0.0;
+  // motor.PID_current_d.output_ramp = 0.0;
+  // motor.PID_current_d.limit = 12.0;
+  // Low pass filtering time constant
+  // motor.LPF_current_d.Tf = 0.005;
+  // Limits
+  motor.velocity_limit = DEFAULT_MAX_VELOCITY;  // default 20
+  motor.voltage_limit = 12.0;
+  motor.current_limit = 2.0;
+  // sensor zero offset - home position
+  // motor.sensor_offset = 0.0;
+  // sensor zero electrical angle
+  // this parameter enables skipping a part of initFOC
+  // general settings
+  // motor phase resistance
+  // motor.phase_resistance = 0.189;
+  // pwm modulation settings
+  // motor.foc_modulation = FOCModulationType::SinePWM;
+  // motor.modulation_centered = 1.0;
+
+  // Devrait atteindre 567rpm et 60rad/s en théorie
+  // 20V et 1,5A max d'après specs
   motor.linkSensor(&sensor);
   motor.linkDriver(&driver);
   motor.init();     // initialize motor
@@ -345,7 +391,6 @@ void setup() {
   serialCommandHandler.registerCommand("help", doGetSerialCommands);
   serialCommandHandler.registerCommand("fake", [] { minAngle = -3*PI; maxAngle = 3*PI; return "debug angles set to -3pi +3pi"; });
 
-  
   serialCommandHandler.registerCommand<float>("mvl", {"v"}, [](float v) {
     motorVoltageLimit = v;
     return "motor.voltage_limit.Tf=" + String(motorVoltageLimit);
@@ -354,18 +399,15 @@ void setup() {
     motor.LPF_velocity.Tf = tf;
     return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
   });
-  serialCommandHandler.registerCommand<float, float, float>("vpid", {"p", "i", "d"}, [](float p, float i, float d) {
-    motor.PID_velocity.P = p;
-    motor.PID_velocity.I = i;
-    motor.PID_velocity.D = d;
-    return "motor.PID_velocity.P=" + String(motor.PID_velocity.P) + "motor.PID_velocity.I=" + String(motor.PID_velocity.I) + "motor.PID_velocity.D=" + String(motor.PID_velocity.D);
+  serialCommandHandler.registerCommand<float>("tf", {"tf"}, [](float tf) {
+    motor.LPF_velocity.Tf = tf;
+    return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
   });
-  serialCommandHandler.registerCommand<float, float, float>("apid", {"p", "i", "d"}, [](float p, float i, float d) {
-    motor.P_angle.P = p;
-    motor.P_angle.I = i;
-    motor.P_angle.D = d;
-    return "motor.P_angle.P=" + String(motor.P_angle.P) + "motor.P_angle.I=" + String(motor.P_angle.I) + "motor.P_angle.D=" + String(motor.P_angle.D);
+  serialCommandHandler.registerCommand<float>("v", {"v"}, [](float v) {
+    max_velocity = v;
+    return "max_velocity=" + String(max_velocity);
   });
+
 
   // Register REST API routes
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
@@ -377,7 +419,6 @@ void setup() {
 }
 
 void loop() {
-
   switch (appState) {
     case CALIBRATING_MANUALLY: {
       if (motor.enabled) {
@@ -401,8 +442,8 @@ void loop() {
       if (!motor.enabled) {
         motor.enable();
       }
-      motor.voltage_limit = motorVoltageLimit;             // maximal voltage to be set to the motor
-      motor.velocity_limit = MAX_VELOCITY;  // maximal velocity of the position control
+      motor.voltage_limit = motorVoltageLimit;  // maximal voltage to be set to the motor
+      motor.velocity_limit = max_velocity;      // maximal velocity of the position control
       break;
     }
     case STOPPED: {
@@ -425,6 +466,4 @@ void loop() {
   } else {
     sensor.update();
   }
-
- 
 }
