@@ -255,7 +255,7 @@ void SecondaryTask(void* parameter) {
     if (debugBuilder.hasChanged()) {  // 110 us
       Serial.println(debugBuilder.buildJson());
     }
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(10 / portTICK_PERIOD_MS); //10ms
   }
 }
 
@@ -282,7 +282,7 @@ void WebSocketTask(void* parameter) {
 
   while (1) {
     ws.loop();
-    vTaskDelay(10 / portTICK_PERIOD_MS);  // Évite de surcharger le CPU
+    vTaskDelay(10 / portTICK_PERIOD_MS);  // 10ms
   }
 }
 
