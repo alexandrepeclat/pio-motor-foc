@@ -1,6 +1,6 @@
-// /**
-//  * ESP32 position motion control example with magnetic sensor
-//  */
+/**
+ * ESP32 position motion control with magnetic sensor
+ */
 #include <Arduino.h>
 #include <DebugBuilder.h>
 #include <ESPAsyncWebServer.h>
@@ -43,10 +43,10 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable 
 float minAngle = std::numeric_limits<float>::max();
 float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
-volatile float target_angle = 0;
+volatile float targetAngle = 0;
 
 float motorVoltageLimit = 20;
-volatile float max_velocity = DEFAULT_MAX_VELOCITY;
+volatile float targetVelocity = 0;
 
 
 float mapFloat(float value, float inMin, float inMax, float outMin, float outMax) {
@@ -62,8 +62,8 @@ bool isCalibrated() {
 
 String doTargetRaw(float angle) {
   appState = AppState::RUNNING;
-  target_angle = angle;
-  return "Target raw: " + String(target_angle);
+  targetAngle = angle;
+  return "Target raw: " + String(targetAngle);
 }
 
 String doTargetNormalized(int angleNormalized) {
@@ -71,8 +71,8 @@ String doTargetNormalized(int angleNormalized) {
     return "Motor not calibrated yet";
   }
   appState = AppState::RUNNING;
-  target_angle = mapFloat(angleNormalized, 0, 100, minAngle, maxAngle);
-  return "Target normalized: " + String(angleNormalized) + " Target raw: " + String(target_angle);
+  targetAngle = mapFloat(angleNormalized, 0, 100, minAngle, maxAngle);
+  return "Target normalized: " + String(angleNormalized) + " Target raw: " + String(targetAngle);
 }
 
 String doGetRestRoutes() {
@@ -84,7 +84,7 @@ String doGetSerialCommands() {
 }
 
 String doGetDebug() {
-  return "Min angle: " + String(minAngle) + " Max angle: " + String(maxAngle) + " Current angle: " + String(sensor.getAngle()) + " Target angle: " + String(target_angle) + " App state: " + String(appState);
+  return "Min angle: " + String(minAngle) + " Max angle: " + String(maxAngle) + " Current angle: " + String(sensor.getAngle()) + " Target angle: " + String(targetAngle) + " App state: " + String(appState);
 }
 
 String doStop() {
@@ -94,14 +94,14 @@ String doStop() {
 
 String doRun() {
   appState = AppState::RUNNING;
-  return "RUNNING | Min angle: " + String(minAngle) + " Max angle: " + String(maxAngle) + " Current angle: " + String(sensor.getAngle()) + " Target angle: " + String(target_angle);
+  return "RUNNING | Min angle: " + String(minAngle) + " Max angle: " + String(maxAngle) + " Current angle: " + String(sensor.getAngle()) + " Target angle: " + String(targetAngle);
 }
 
 String doCalibrate() {
   appState = AppState::CALIBRATING_MANUALLY;
   minAngle = std::numeric_limits<float>::max();  // Valeur initiale très haute
   maxAngle = std::numeric_limits<float>::min();  // Valeur initiale très basse
-  return "CALIBRATING_MANUALLY | Target angle:" + String(target_angle) + " Sensor angle:" + String(sensor.getAngle());
+  return "CALIBRATING_MANUALLY | Target angle:" + String(targetAngle) + " Sensor angle:" + String(sensor.getAngle());
 }
 
 // Fonction pour analyser la commande reçue
@@ -171,8 +171,8 @@ void executeCommand(Command cmd) {
 
     // Définir la vitesse et l'angle cible
     noInterrupts();
-    target_angle = target_angle_rounded;
-    max_velocity = velocity;
+    targetAngle = target_angle_rounded;
+    targetVelocity = velocity;
     interrupts();
   }
 }
@@ -209,18 +209,18 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 
 std::vector<DebugField> debugFields = {
     {"angle", true, [] { return sensor.getAngle(); }},
-    {"target", true, [] { return target_angle; }},
+    {"targetAngle", true, [] { return targetAngle; }},
     {"state", true, [] { return appState; }},
     {"minAngle", true, [] { return minAngle; }},
     {"maxAngle", true, [] { return maxAngle; }},
-    {"velocity", false, [] { return motor.shaft_velocity; }},
+    {"shaft_velocity", false, [] { return motor.shaft_velocity; }},
     {"voltageQ", false, [] { return motor.voltage.q; }},
     // {"voltageD", false, [] { return motor.voltage.d; }},
     // {"currentQ", false, [] { return motor.current.q; }},
     // {"currentD", false, [] { return motor.current.d; }},
-    {"voltageLimit", true, [] { return motor.voltage_limit; }},
-    {"velocityLimit", true, [] { return motor.velocity_limit; }},
-    {"velocityLimitVar", true, [] { return max_velocity; }},
+    {"voltage_limit", true, [] { return motor.voltage_limit; }},
+    {"velocity_limit", true, [] { return motor.velocity_limit; }},
+    {"targetVelocity", true, [] { return targetVelocity; }},
     {"calibrated", true, [] { return isCalibrated(); }},
     {"wsClients", true, [] { return wsserver.count(); }},
     // {"motorVoltageLimit", true, [] { return motorVoltageLimit; }},
@@ -404,8 +404,8 @@ void setup() {
     return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
   });
   serialCommandHandler.registerCommand<float>("v", {"v"}, [](float v) {
-    max_velocity = v;
-    return "max_velocity=" + String(max_velocity);
+    targetVelocity = v;
+    return "max_velocity=" + String(targetVelocity);
   });
 
 
@@ -427,7 +427,7 @@ void loop() {
       motor.voltage_limit = 0;
       motor.velocity_limit = 0;
       float currentAngle = sensor.getAngle();
-      target_angle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
+      targetAngle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
       if (currentAngle < minAngle) {
         minAngle = currentAngle;
         Serial.println("Min-max angles: " + String(minAngle) + " " + String(maxAngle));
@@ -443,7 +443,7 @@ void loop() {
         motor.enable();
       }
       motor.voltage_limit = motorVoltageLimit;  // maximal voltage to be set to the motor
-      motor.velocity_limit = max_velocity;      // maximal velocity of the position control
+      motor.velocity_limit = targetVelocity;      // maximal velocity of the position control
       break;
     }
     case STOPPED: {
@@ -451,7 +451,7 @@ void loop() {
         motor.disable();
       }
       float currentAngle = sensor.getAngle();
-      target_angle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
+      targetAngle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
       motor.voltage_limit = 0;
       motor.velocity_limit = 0;
       break;
@@ -462,7 +462,7 @@ void loop() {
   // Even if motor is stopped, For updating sensors
   if (motor.enabled) {
     motor.loopFOC();
-    motor.move(target_angle);  // Motion control function velocity, position or voltage (defined in motor.controller) this function can be run at much lower frequency than loopFOC() function
+    motor.move(targetAngle);  // Motion control function velocity, position or voltage (defined in motor.controller) this function can be run at much lower frequency than loopFOC() function
   } else {
     sensor.update();
   }
