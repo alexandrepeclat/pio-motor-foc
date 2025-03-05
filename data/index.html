@@ -19,9 +19,12 @@
         <h2>Target</h2>
         <label for="angleSlider">Set Angle:</label>
         <input type="range" id="angleSlider" name="angleSlider" min="0" max="100" oninput="setAngle(this.value)">
-        <input type="range" id="feedbackSlider" name="feedbackSlider" min="0" max="100"
-            oninput="adjustGain(this.value)">
+        <input type="range" id="feedbackSlider" name="feedbackSlider" min="0" max="100" oninput="adjustGain(this.value)">
 
+        <h2>Velocity</h2>
+        <input type="range" id="velocitySlider" name="velocitySlider" min="0" max="100">           
+
+        <h2>Response</h2>
         <pre id="responseMessage" style="white-space:wrap;word-break:break-word;"></pre>
     </div>
 
@@ -95,7 +98,8 @@
         }
 
         function setAngle(angle) {
-            apiRequest('/target', 'POST', { angle });
+            const velocity = document.getElementById('velocitySlider').value;
+            apiRequest('/target', 'POST', { angle, velocity }); //100 is max velocity normalized 
         }
     </script>
 

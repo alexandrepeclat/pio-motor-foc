@@ -20,9 +20,16 @@ enum AppState {
   RUNNING,
   STOPPED
 };
+const int DEFAULT_MOTOR_VOLTAGE = 12;
+const int DEFAULT_DRIVER_VOLTAGE = 12;
 const int DEFAULT_MAX_VELOCITY = 80;
 const int CMD_MIN = 0;
 const int CMD_MAX = 100;
+
+// const String WS_CLIENT_IP = "192.168.0.173";  // PC
+// const int WS_CLIENT_PORT = 1234;
+const String WS_CLIENT_IP = "192.168.0.204";  // HyperV
+const int WS_CLIENT_PORT = 54817;
 
 WebSocketsClient ws;
 AsyncWebServer server(80);
@@ -45,9 +52,8 @@ float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
 volatile float targetAngle = 0;
 
-float motorVoltageLimit = 20;
+float motorVoltageLimit = DEFAULT_MOTOR_VOLTAGE;
 volatile float targetVelocity = 0;
-
 
 float mapFloat(float value, float inMin, float inMax, float outMin, float outMax) {
   if (inMin == inMax)
@@ -66,13 +72,14 @@ String doTargetRaw(float angle) {
   return "Target raw: " + String(targetAngle);
 }
 
-String doTargetNormalized(int angleNormalized) {
+String doTargetNormalized(int angleNormalized, int velocityNormalized) {
   if (!isCalibrated()) {
     return "Motor not calibrated yet";
   }
   appState = AppState::RUNNING;
   targetAngle = mapFloat(angleNormalized, 0, 100, minAngle, maxAngle);
-  return "Target normalized: " + String(angleNormalized) + " Target raw: " + String(targetAngle);
+  targetVelocity = mapFloat(velocityNormalized, 0, 100, 0, DEFAULT_MAX_VELOCITY);
+  return "Target normalized: " + String(angleNormalized) + " Target raw: " + String(targetAngle) + " velocity normalized: " + String(velocityNormalized) + " velocity raw: " + String(targetVelocity);
 }
 
 String doGetRestRoutes() {
@@ -255,7 +262,7 @@ void SecondaryTask(void* parameter) {
     if (debugBuilder.hasChanged()) {  // 110 us
       Serial.println(debugBuilder.buildJson());
     }
-    vTaskDelay(10 / portTICK_PERIOD_MS); //10ms
+    vTaskDelay(1000 / portTICK_PERIOD_MS);  // 1000ms
   }
 }
 
@@ -275,8 +282,7 @@ void WebSocketTask(void* parameter) {
   Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT");  // TODO charger port depuis settings ? virer du constructeur
 
   Serial.println("Connexion au WebSocket...");
-  ws.begin("192.168.0.173", 1234, "/");  // PC
-                                         // ws.begin("192.168.0.204", 54817, "/");  // HyperV
+  ws.begin(WS_CLIENT_IP, WS_CLIENT_PORT, "/");
   ws.onEvent(onWsEvent);
   ws.setReconnectInterval(5000);
 
@@ -316,7 +322,7 @@ void setup() {
 
   sensor.init();
 
-  driver.voltage_power_supply = 20;  // power supply voltage [V]
+  driver.voltage_power_supply = DEFAULT_DRIVER_VOLTAGE;  // power supply voltage [V]
   driver.init();
 
   // control loop type and torque mode
@@ -359,7 +365,7 @@ void setup() {
   // motor.LPF_current_d.Tf = 0.005;
   // Limits
   motor.velocity_limit = DEFAULT_MAX_VELOCITY;  // default 20
-  motor.voltage_limit = 12.0;
+  motor.voltage_limit = DEFAULT_MOTOR_VOLTAGE;
   motor.current_limit = 2.0;
   // sensor zero offset - home position
   // motor.sensor_offset = 0.0;
@@ -386,7 +392,7 @@ void setup() {
   serialCommandHandler.registerCommand("calibrate", doCalibrate);
   serialCommandHandler.registerCommand("r", doRun);
   serialCommandHandler.registerCommand("run", doRun);
-  serialCommandHandler.registerCommand<int>("target", {"angle"}, doTargetNormalized);
+  serialCommandHandler.registerCommand<int, int>("target", {"angle", "velocity"}, doTargetNormalized);
   serialCommandHandler.registerCommand("debug", doGetDebug);
   serialCommandHandler.registerCommand("help", doGetSerialCommands);
   serialCommandHandler.registerCommand("fake", [] { minAngle = -3*PI; maxAngle = 3*PI; return "debug angles set to -3pi +3pi"; });
@@ -399,21 +405,16 @@ void setup() {
     motor.LPF_velocity.Tf = tf;
     return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
   });
-  serialCommandHandler.registerCommand<float>("tf", {"tf"}, [](float tf) {
-    motor.LPF_velocity.Tf = tf;
-    return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
-  });
   serialCommandHandler.registerCommand<float>("v", {"v"}, [](float v) {
     targetVelocity = v;
     return "max_velocity=" + String(targetVelocity);
   });
 
-
   // Register REST API routes
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
   restCommandHandler.registerCommand("calibrate", HTTP_GET, doCalibrate);
   restCommandHandler.registerCommand("run", HTTP_GET, doRun);
-  restCommandHandler.registerCommand<int>("target", HTTP_POST, {"angle"}, doTargetNormalized);
+  restCommandHandler.registerCommand<int, int>("target", HTTP_POST, {"angle", "velocity"}, doTargetNormalized);
   restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
   restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
 }
@@ -443,7 +444,7 @@ void loop() {
         motor.enable();
       }
       motor.voltage_limit = motorVoltageLimit;  // maximal voltage to be set to the motor
-      motor.velocity_limit = targetVelocity;      // maximal velocity of the position control
+      motor.velocity_limit = targetVelocity;    // maximal velocity of the position control
       break;
     }
     case STOPPED: {
