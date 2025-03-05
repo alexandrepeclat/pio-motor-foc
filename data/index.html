@@ -22,7 +22,11 @@
         <input type="range" id="feedbackSlider" name="feedbackSlider" min="0" max="100" oninput="adjustGain(this.value)">
 
         <h2>Velocity</h2>
-        <input type="range" id="velocitySlider" name="velocitySlider" min="0" max="100">           
+        <label for="velocityMultiplierSlider">Set velocity for angle slider:</label>
+        <input type="range" id="velocitySlider" name="velocitySlider" min="0" max="100">       
+        
+        <label for="velocityMultiplierSlider">Set velocity multiplier for commands:</label>
+        <input type="range" id="velocityMultiplierSlider" name="velocityMultiplierSlider" min="0" max="3" step="0.1" value="1" oninput="setVelocityMultiplier(this.value)">           
 
         <h2>Response</h2>
         <pre id="responseMessage" style="white-space:wrap;word-break:break-word;"></pre>
@@ -100,6 +104,10 @@
         function setAngle(angle) {
             const velocity = document.getElementById('velocitySlider').value;
             apiRequest('/target', 'POST', { angle, velocity }); //100 is max velocity normalized 
+        }
+
+        function setVelocityMultiplier(multiplier) {
+            apiRequest('/velocityMultiplier', 'POST', { multiplier });
         }
     </script>
 

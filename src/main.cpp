@@ -54,6 +54,7 @@ volatile float targetAngle = 0;
 
 float motorVoltageLimit = DEFAULT_MOTOR_VOLTAGE;
 volatile float targetVelocity = 0;
+float velocityMultiplier = 1;
 
 float mapFloat(float value, float inMin, float inMax, float outMin, float outMax) {
   if (inMin == inMax)
@@ -113,6 +114,7 @@ String doCalibrate() {
 
 // Fonction pour analyser la commande reçue
 struct Command {
+  String rawCommand;
   char action;
   int axis;
   int value;
@@ -143,43 +145,46 @@ Command parseCommand(const String& input) {
   // Format attendu : [Action][Axis][Value][Type][Interval]
   if (input.length() >= 7) {  // La commande doit être d'une longueur suffisante
     Command cmd;
+    cmd.rawCommand = input;
     cmd.action = input.charAt(0);               // 'L'
     cmd.axis = input.charAt(1) - '0';           // '0' -> 0
     cmd.value = input.substring(2, 4).toInt();  // '50' -> 50
     cmd.interval = input.substring(5).toInt();  // '5000' -> 5000
     return cmd;
   } else {
-    Command cmd = {'\0', -1, -1, -1};  // Valeurs par défaut pour une commande invalide
+    Command cmd = {input, '\0', -1, -1, -1};  // Valeurs par défaut pour une commande invalide
     return cmd;
   }
 }
 
 void executeCommand(Command cmd) {
   if (!isCalibrated()) {
-    Serial.println("Command ignored: Motor not calibrated yet");
+    Serial.println("CMD: " + cmd.rawCommand + " ignored: Motor not calibrated yet");
     return;
   }
   if (appState != AppState::RUNNING) {
-    Serial.println("Command ignored: Motor not running");
+    Serial.println("CMD: " + cmd.rawCommand + " ignored: Motor not running");
     return;
   }
   if (cmd.action == 'L' && cmd.axis == 0) {
     float target_position = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle);
+    sensor.update();
     float current_position = sensor.getAngle();
     float delta_angle = target_position - current_position;
     float velocity = abs(delta_angle / (cmd.interval / 1000.0));
+    velocity *= velocityMultiplier;
+    float velocityRounded = round(velocity * 100) / 100.0;
     float target_angle_rounded = round(target_position * 100) / 100.0;
-    Serial.println("CMD: A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T(r): " + String(target_angle_rounded) + " C(s): " + String(current_position) + " C(m): " + String(motor.shaft_angle) + " D: " + String(delta_angle) + " V: " + String(velocity));
-
+    Serial.println("CMD: " + cmd.rawCommand + " A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T(r): " + String(target_angle_rounded) + " C(s): " + String(current_position) + " C(m): " + String(motor.shaft_angle) + " D: " + String(delta_angle) + " V: " + String(velocityRounded));
     // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
-    if (velocity > DEFAULT_MAX_VELOCITY) {
-      velocity = DEFAULT_MAX_VELOCITY;
+    if (velocityRounded > DEFAULT_MAX_VELOCITY) {
+      velocityRounded = DEFAULT_MAX_VELOCITY;
     }
 
     // Définir la vitesse et l'angle cible
     noInterrupts();
     targetAngle = target_angle_rounded;
-    targetVelocity = velocity;
+    targetVelocity = velocityRounded;
     interrupts();
   }
 }
@@ -220,6 +225,7 @@ std::vector<DebugField> debugFields = {
     {"state", true, [] { return appState; }},
     {"minAngle", true, [] { return minAngle; }},
     {"maxAngle", true, [] { return maxAngle; }},
+    {"velocityMultiplier", true, [] { return velocityMultiplier; }},
     {"shaft_velocity", false, [] { return motor.shaft_velocity; }},
     {"voltageQ", false, [] { return motor.voltage.q; }},
     // {"voltageD", false, [] { return motor.voltage.d; }},
@@ -417,6 +423,10 @@ void setup() {
   restCommandHandler.registerCommand<int, int>("target", HTTP_POST, {"angle", "velocity"}, doTargetNormalized);
   restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
   restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
+  restCommandHandler.registerCommand<float>("velocityMultiplier", HTTP_POST, {"multiplier"}, [](float multiplier) {
+    velocityMultiplier = multiplier;
+    return "velocityMultiplier=" + String(velocityMultiplier);
+  });
 }
 
 void loop() {
