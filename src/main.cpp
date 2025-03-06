@@ -139,6 +139,23 @@ void notifyAngleChange() {
     lastAngle = currentAngle;
   }
 }
+/*
+Websocket: OpvgK5l2u4V8
+Token: e6f96b03797689f628d2590617727fc2
+{"id": "esphook", "mode": "speed", "speed": 50, "upper": 100, "lower": 0}
+{"id": "esphook", "mode": "position", "duration": 130, "position": 90}
+
+const socket = new WebSocket('wss://webhook.yyy.app/OpvgK5l2u4V8', {
+      headers: {
+        Authorization: 'Bearer e6f96b03797689f628d2590617727fc2'
+      }
+    })
+
+    socket.on('message', (msg) => {
+      const command = msg.toString()
+      // TODO: react based on command
+    })
+*/
 
 Command parseCommand(const String& input) {
   // Expression régulière pour extraire les données
