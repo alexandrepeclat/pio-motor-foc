@@ -58,6 +58,10 @@ volatile float targetAngle = 0;
 volatile float targetVelocity = 0;
 float velocityMultiplier = 1;
 
+float roundFloat2dec(float value) {
+  return round(value * 100.0) / 100.0;
+}
+
 float mapFloat(float value, float inMin, float inMax, float outMin, float outMax) {
   if (inMin == inMax)
     return outMin;                         // Évite la division par zéro
@@ -186,24 +190,25 @@ void executeCommand(Command cmd) {
     return;
   }
   if (cmd.action == 'L' && cmd.axis == 0) {
-    float target_position = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle);
     sensor.update();
-    float current_position = sensor.getAngle();
-    float delta_angle = target_position - current_position;
-    float velocity = abs(delta_angle / (cmd.interval / 1000.0));
-    velocity *= velocityMultiplier;
-    float velocityRounded = round(velocity * 100) / 100.0;
-    float target_angle_rounded = round(target_position * 100) / 100.0;
-    Serial.println("CMD: " + cmd.rawCommand + " A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T(r): " + String(target_angle_rounded) + " C(s): " + String(current_position) + " C(m): " + String(motor.shaft_angle) + " D: " + String(delta_angle) + " V: " + String(velocityRounded));
+    float cmdPosition = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle); //cmd value [0-100] -> calibrated angles [minAngle-maxAngle]
+    float currentPosition = sensor.getAngle();
+    float deltaPosition = cmdPosition - currentPosition;
+    float cmdVelocity = abs(deltaPosition / (cmd.interval / 1000.0));  // cmd interval (ms) -> velocity (rad/s)
+    cmdVelocity *= velocityMultiplier;
+    cmdVelocity = roundFloat2dec(cmdVelocity);
+    cmdPosition = roundFloat2dec(cmdPosition);
+    Serial.println("CMD: " + cmd.rawCommand + " A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T: " + String(cmdPosition) + " C: " + String(currentPosition) + " Shaft: " + String(motor.shaft_angle) + " D: " + String(deltaPosition) + " V: " + String(cmdVelocity));
+
     // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
-    if (velocityRounded > DEFAULT_MAX_VELOCITY) {
-      velocityRounded = DEFAULT_MAX_VELOCITY;
+    if (cmdVelocity > DEFAULT_MAX_VELOCITY) {
+      cmdVelocity = DEFAULT_MAX_VELOCITY;
     }
 
     // Définir la vitesse et l'angle cible
     noInterrupts();
-    targetAngle = target_angle_rounded;
-    targetVelocity = velocityRounded;
+    targetAngle = cmdPosition;
+    targetVelocity = cmdVelocity;
     interrupts();
   }
 }
@@ -223,7 +228,6 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     // }
     // Serial.println();
     String input = String((char*)payload);
-    // Serial.println("Command received: " + input);
     Command cmd = parseCommand(input);
     executeCommand(cmd);
   } else if (type == WStype_CONNECTED) {
@@ -454,7 +458,7 @@ void loop() {
       if (!motor.enabled) {
         motor.enable();
       }
-      
+
       break;
     }
     case STOPPED: {
@@ -464,12 +468,12 @@ void loop() {
       break;
     }
   }
-  
+
   // main FOC algorithm function the faster you run this function the better //TODO à voir si loopFoc doit être fait avant les trucs dans le switch
   // Even if motor is stopped, For updating sensors
   if (motor.enabled) {
     motor.voltage_limit = DEFAULT_MOTOR_VOLTAGE;  // maximal voltage to be set to the motor
-    motor.velocity_limit = targetVelocity;    // maximal velocity of the position control
+    motor.velocity_limit = targetVelocity;        // maximal velocity of the position control
     motor.loopFOC();
     motor.move(targetAngle);  // Motion control function velocity, position or voltage (defined in motor.controller) this function can be run at much lower frequency than loopFOC() function
   } else {
