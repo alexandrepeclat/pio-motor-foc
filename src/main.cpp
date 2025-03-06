@@ -180,7 +180,7 @@ Command parseCommand(const String& input) {
   }
 }
 
-void executeCommand(Command cmd) {
+void executeCommand(Command cmd) { //TODO fonction doMove() qui prend le minimum en paramètre et est appelée à la place de doTargetNormalized() ? 
   if (!isCalibrated()) {
     Serial.println("CMD: " + cmd.rawCommand + " ignored: Motor not calibrated yet");
     return;
