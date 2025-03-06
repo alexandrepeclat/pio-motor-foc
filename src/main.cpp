@@ -37,7 +37,7 @@ const int CMD_MAX = 100;
 const String WS_CLIENT_IP = "192.168.0.100";  // VmWare
 const int WS_CLIENT_PORT = 54817;
 
-WebSocketsClient ws;
+WebSocketsClient wsclient;
 AsyncWebServer server(80);
 AsyncCorsMiddleware cors;
 AsyncWebSocket wsserver("/angle");
@@ -55,7 +55,6 @@ float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
 volatile float targetAngle = 0;
 
-float motorVoltageLimit = DEFAULT_MOTOR_VOLTAGE;
 volatile float targetVelocity = 0;
 float velocityMultiplier = 1;
 
@@ -211,10 +210,8 @@ void executeCommand(Command cmd) {
 
 // Fonction pour gérer les messages reçus via WebSocket
 void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
-  Serial.println();
   if (type == WStype_TEXT) {
     String input = String((char*)payload);
-    Serial.println("Command received: " + input);
     Command cmd = parseCommand(input);
     executeCommand(cmd);
   } else if (type == WStype_BIN) {
@@ -231,7 +228,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     executeCommand(cmd);
   } else if (type == WStype_CONNECTED) {
     Serial.println("WebSocket connected");
-    ws.sendTXT("{ \"identifier\": \"myesp\", \"address\": \"00000000\", \"version\": 0 }");  // Envoie un message initial
+    wsclient.sendTXT("{ \"identifier\": \"myesp\", \"address\": \"00000000\", \"version\": 0 }");  // Envoie un message initial
   } else if (type == WStype_DISCONNECTED) {
     Serial.println("WebSocket disconnected");
   } else if (type == WStype_ERROR) {
@@ -308,12 +305,12 @@ void WebSocketTask(void* parameter) {
   Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT");  // TODO charger port depuis settings ? virer du constructeur
 
   Serial.println("Connexion au WebSocket...");
-  ws.begin(WS_CLIENT_IP, WS_CLIENT_PORT, "/");
-  ws.onEvent(onWsEvent);
-  ws.setReconnectInterval(5000);
+  wsclient.begin(WS_CLIENT_IP, WS_CLIENT_PORT, "/");
+  wsclient.onEvent(onWsEvent);
+  wsclient.setReconnectInterval(5000);
 
   while (1) {
-    ws.loop();
+    wsclient.loop();
     vTaskDelay(10 / portTICK_PERIOD_MS);  // 10ms
   }
 }
@@ -442,10 +439,7 @@ void loop() {
       if (motor.enabled) {
         motor.disable();
       }
-      motor.voltage_limit = 0;
-      motor.velocity_limit = 0;
       float currentAngle = sensor.getAngle();
-      targetAngle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
       if (currentAngle < minAngle) {
         minAngle = currentAngle;
         Serial.println("Min-max angles: " + String(minAngle) + " " + String(maxAngle));
@@ -460,28 +454,28 @@ void loop() {
       if (!motor.enabled) {
         motor.enable();
       }
-      motor.voltage_limit = motorVoltageLimit;  // maximal voltage to be set to the motor
-      motor.velocity_limit = targetVelocity;    // maximal velocity of the position control
+      
       break;
     }
     case STOPPED: {
       if (motor.enabled) {
         motor.disable();
       }
-      float currentAngle = sensor.getAngle();
-      targetAngle = currentAngle;  // Set target angle as the current angle, for not "jumping" when starting
-      motor.voltage_limit = 0;
-      motor.velocity_limit = 0;
       break;
     }
   }
-
+  
   // main FOC algorithm function the faster you run this function the better //TODO à voir si loopFoc doit être fait avant les trucs dans le switch
   // Even if motor is stopped, For updating sensors
   if (motor.enabled) {
+    motor.voltage_limit = DEFAULT_MOTOR_VOLTAGE;  // maximal voltage to be set to the motor
+    motor.velocity_limit = targetVelocity;    // maximal velocity of the position control
     motor.loopFOC();
     motor.move(targetAngle);  // Motion control function velocity, position or voltage (defined in motor.controller) this function can be run at much lower frequency than loopFOC() function
   } else {
+    motor.voltage_limit = 0;
+    motor.velocity_limit = 0;
     sensor.update();
+    targetAngle = sensor.getAngle();  // Set target angle as the current angle, for not "jumping" when starting
   }
 }
