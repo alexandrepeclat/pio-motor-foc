@@ -11,6 +11,9 @@ Simple FOC Mini DRV8313 | 8-24V | motor driver | Buy : https://fr.aliexpress.com
 
 ### Sucking errors
 - Problème avec arrondis target motor (pas implémenté finalement) : https://community.simplefoc.com/t/motor-vibrates-on-achieving-angle-position/6658
+- Problème de vitesse, finalement réglé en changeant motor.velocity_limit. Peut être influencé aussi par motor.LPF_velocity.Tf si trop élevé
+  - Pourrait venir de la fréquence des PWM (qui est déjà assez élevée par défaut) https://docs.simplefoc.com/bldcdriver3pwm 
+  - Pourrait venir du fait qu'il faut toutes sorties sur même timer ce qui permet d'avoir MCPWM activé (ce qui est le cas) https://docs.simplefoc.com/choosing_pwm_pins#esp32-boards
 
 ### Mécanique
 - Courroie GT2 (2mm step entre dents)

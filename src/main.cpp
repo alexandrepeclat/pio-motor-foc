@@ -14,6 +14,10 @@
 #include <limits>
 
 const int PIN_SENSOR_CS = 5;
+const int PIN_MOTOR_PWM1 = 25;
+const int PIN_MOTOR_PWM2 = 26;
+const int PIN_MOTOR_PWM3 = 27;
+const int PIN_MOTOR_ENABLE = 15;
 
 enum AppState {
   CALIBRATING_MANUALLY,
@@ -28,7 +32,9 @@ const int CMD_MAX = 100;
 
 // const String WS_CLIENT_IP = "192.168.0.173";  // PC
 // const int WS_CLIENT_PORT = 1234;
-const String WS_CLIENT_IP = "192.168.0.204";  // HyperV
+// const String WS_CLIENT_IP = "192.168.0.204";  // HyperV
+// const int WS_CLIENT_PORT = 54817;
+const String WS_CLIENT_IP = "192.168.0.100";  // VmWare
 const int WS_CLIENT_PORT = 54817;
 
 WebSocketsClient ws;
@@ -37,15 +43,12 @@ AsyncCorsMiddleware cors;
 AsyncWebSocket wsserver("/angle");
 SerialCommandHandler serialCommandHandler;
 RestCommandHandler restCommandHandler(server);
-// MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, PIN_SENSOR_CS);
 MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true);
 
-// TODO https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/as5048a
 // TODO loop foc dans tâches prioritaire
-// TODO voir fréquences PWM https://docs.simplefoc.com/bldcdriver3pwm + toutes sorties sur même timer + s'assurer d'avoir MCPWM https://docs.simplefoc.com/choosing_pwm_pins#esp32-boards
 
-BLDCMotor motor = BLDCMotor(11);
-BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 15);  // 3 pwm pins + enable pin
+BLDCMotor motor = BLDCMotor(11);  // GM4108H-120T has 22 poles, so 11 pole pairs
+BLDCDriver3PWM driver = BLDCDriver3PWM(PIN_MOTOR_PWM1, PIN_MOTOR_PWM2, PIN_MOTOR_PWM3, PIN_MOTOR_ENABLE);
 
 float minAngle = std::numeric_limits<float>::max();
 float maxAngle = std::numeric_limits<float>::min();
@@ -419,19 +422,6 @@ void setup() {
   serialCommandHandler.registerCommand("debug", doGetDebug);
   serialCommandHandler.registerCommand("help", doGetSerialCommands);
   serialCommandHandler.registerCommand("fake", [] { minAngle = -3*PI; maxAngle = 3*PI; return "debug angles set to -3pi +3pi"; });
-
-  serialCommandHandler.registerCommand<float>("mvl", {"v"}, [](float v) {
-    motorVoltageLimit = v;
-    return "motor.voltage_limit.Tf=" + String(motorVoltageLimit);
-  });
-  serialCommandHandler.registerCommand<float>("tf", {"tf"}, [](float tf) {
-    motor.LPF_velocity.Tf = tf;
-    return "motor.LPF_velocity.Tf=" + String(motor.LPF_velocity.Tf);
-  });
-  serialCommandHandler.registerCommand<float>("v", {"v"}, [](float v) {
-    targetVelocity = v;
-    return "max_velocity=" + String(targetVelocity);
-  });
 
   // Register REST API routes
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
