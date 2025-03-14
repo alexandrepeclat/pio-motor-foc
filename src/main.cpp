@@ -2,6 +2,7 @@
  * ESP32 position motion control with magnetic sensor
  */
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <DebugBuilder.h>
 #include <ESPAsyncWebServer.h>
 #include <RestCommandHandler.h>
@@ -32,15 +33,16 @@ const int CMD_MAX = 100;
 
 // const String WS_CLIENT_IP = "192.168.0.173";  // PC
 // const int WS_CLIENT_PORT = 1234;
-// const String WS_CLIENT_IP = "192.168.0.204";  // HyperV
-// const int WS_CLIENT_PORT = 54817;
-const String WS_CLIENT_IP = "192.168.0.100";  // VmWare
+const String WS_CLIENT_IP = "192.168.0.204";  // HyperV
 const int WS_CLIENT_PORT = 54817;
+// const String WS_CLIENT_IP = "192.168.0.100";  // VmWare
+// const int WS_CLIENT_PORT = 54817;
 
 WebSocketsClient wsclient;
+bool wsClientEnabled = false;
 AsyncWebServer server(80);
 AsyncCorsMiddleware cors;
-AsyncWebSocket wsserver("/angle");
+AsyncWebSocket wsserver("/position");
 SerialCommandHandler serialCommandHandler;
 RestCommandHandler restCommandHandler(server);
 MagneticSensorAS5048A sensor(PIN_SENSOR_CS, true);
@@ -54,9 +56,7 @@ float minAngle = std::numeric_limits<float>::max();
 float maxAngle = std::numeric_limits<float>::min();
 AppState appState = AppState::STOPPED;
 volatile float targetAngle = 0;
-
 volatile float targetVelocity = 0;
-float velocityMultiplier = 1;
 
 float roundFloat2dec(float value) {
   return round(value * 100.0) / 100.0;
@@ -69,24 +69,31 @@ float mapFloat(float value, float inMin, float inMax, float outMin, float outMax
   return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
 }
 
+void setPositionNormalized(int positionNormalized, int velocityNormalized) {
+  float cmdAngle = mapFloat(positionNormalized, 0, 100, minAngle, maxAngle);  // cmd value [0-100] -> calibrated angles [minAngle-maxAngle]
+  float cmdVelocity = mapFloat(velocityNormalized, 0, 100, 0, DEFAULT_MAX_VELOCITY);
+  cmdAngle = roundFloat2dec(cmdAngle);
+  cmdVelocity = roundFloat2dec(cmdVelocity);
+  noInterrupts();
+  targetAngle = cmdAngle;
+  targetVelocity = cmdVelocity;
+  interrupts();
+}
+
 bool isCalibrated() {
   return minAngle != std::numeric_limits<float>::max() && maxAngle != std::numeric_limits<float>::min();
 }
 
-String doTargetRaw(float angle) {
-  appState = AppState::RUNNING;
-  targetAngle = angle;
-  return "Target raw: " + String(targetAngle);
-}
-
-String doTargetNormalized(int angleNormalized, int velocityNormalized) {
+/**
+ * Set position with normalized values (0-100)
+ */
+String doSetPosition(int positionNormalized, int velocityNormalized) {
   if (!isCalibrated()) {
     return "Motor not calibrated yet";
   }
   appState = AppState::RUNNING;
-  targetAngle = mapFloat(angleNormalized, 0, 100, minAngle, maxAngle);
-  targetVelocity = mapFloat(velocityNormalized, 0, 100, 0, DEFAULT_MAX_VELOCITY);
-  return "Target normalized: " + String(angleNormalized) + " Target raw: " + String(targetAngle) + " velocity normalized: " + String(velocityNormalized) + " velocity raw: " + String(targetVelocity);
+  setPositionNormalized(positionNormalized, velocityNormalized);
+  return "Target normalized: " + String(positionNormalized) + " Target raw: " + String(targetAngle) + " velocity normalized: " + String(velocityNormalized) + " velocity raw: " + String(targetVelocity);
 }
 
 String doGetRestRoutes() {
@@ -118,6 +125,24 @@ String doCalibrate() {
   return "CALIBRATING_MANUALLY | Target angle:" + String(targetAngle) + " Sensor angle:" + String(sensor.getAngle());
 }
 
+String doStartWsClient() {
+  if (wsClientEnabled) {
+    return "WebSocket client already connected";
+  }
+  wsClientEnabled = true;
+  wsclient.begin(WS_CLIENT_IP, WS_CLIENT_PORT, "/");
+  return "WebSocket client connecting to " + WS_CLIENT_IP + ":" + String(WS_CLIENT_PORT);
+}
+
+String doStopWsClient() {
+  if (!wsClientEnabled) {
+    return "WebSocket client already disconnected";
+  }
+  wsClientEnabled = false;
+  wsclient.disconnect();
+  return "WebSocket client disconnected";
+}
+
 // Fonction pour analyser la commande reçue
 struct Command {
   String rawCommand;
@@ -145,23 +170,6 @@ void notifyAngleChange() {
     lastAngle = currentAngle;
   }
 }
-/*
-Websocket: OpvgK5l2u4V8
-Token: e6f96b03797689f628d2590617727fc2
-{"id": "esphook", "mode": "speed", "speed": 50, "upper": 100, "lower": 0}
-{"id": "esphook", "mode": "position", "duration": 130, "position": 90}
-
-const socket = new WebSocket('wss://webhook.yyy.app/OpvgK5l2u4V8', {
-      headers: {
-        Authorization: 'Bearer e6f96b03797689f628d2590617727fc2'
-      }
-    })
-
-    socket.on('message', (msg) => {
-      const command = msg.toString()
-      // TODO: react based on command
-    })
-*/
 
 Command parseCommand(const String& input) {
   // Expression régulière pour extraire les données
@@ -180,7 +188,7 @@ Command parseCommand(const String& input) {
   }
 }
 
-void executeCommand(Command cmd) { //TODO fonction doMove() qui prend le minimum en paramètre et est appelée à la place de doTargetNormalized() ? 
+void executeCommand(Command cmd) {  // TODO fonction doMove() qui prend le minimum en paramètre et est appelée à la place de doTargetNormalized() ?
   if (!isCalibrated()) {
     Serial.println("CMD: " + cmd.rawCommand + " ignored: Motor not calibrated yet");
     return;
@@ -191,14 +199,13 @@ void executeCommand(Command cmd) { //TODO fonction doMove() qui prend le minimum
   }
   if (cmd.action == 'L' && cmd.axis == 0) {
     sensor.update();
-    float cmdPosition = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle); //cmd value [0-100] -> calibrated angles [minAngle-maxAngle]
-    float currentPosition = sensor.getAngle();
-    float deltaPosition = cmdPosition - currentPosition;
+    float cmdAngle = mapFloat(cmd.value, CMD_MIN, CMD_MAX, minAngle, maxAngle);  // cmd value [0-100] -> calibrated angles [minAngle-maxAngle]
+    float currentAngle = sensor.getAngle();
+    float deltaPosition = cmdAngle - currentAngle;
     float cmdVelocity = abs(deltaPosition / (cmd.interval / 1000.0));  // cmd interval (ms) -> velocity (rad/s)
-    cmdVelocity *= velocityMultiplier;
     cmdVelocity = roundFloat2dec(cmdVelocity);
-    cmdPosition = roundFloat2dec(cmdPosition);
-    Serial.println("CMD: " + cmd.rawCommand + " A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T: " + String(cmdPosition) + " C: " + String(currentPosition) + " Shaft: " + String(motor.shaft_angle) + " D: " + String(deltaPosition) + " V: " + String(cmdVelocity));
+    cmdAngle = roundFloat2dec(cmdAngle);
+    Serial.println("CMD: " + cmd.rawCommand + " A: " + String(cmd.axis) + " V: " + String(cmd.value) + " I: " + String(cmd.interval) + " // T: " + String(cmdAngle) + " C: " + String(currentAngle) + " Shaft: " + String(motor.shaft_angle) + " D: " + String(deltaPosition) + " V: " + String(cmdVelocity));
 
     // S'assurer que la vitesse ne dépasse pas la limite de vitesse maximale
     if (cmdVelocity > DEFAULT_MAX_VELOCITY) {
@@ -207,9 +214,52 @@ void executeCommand(Command cmd) { //TODO fonction doMove() qui prend le minimum
 
     // Définir la vitesse et l'angle cible
     noInterrupts();
-    targetAngle = cmdPosition;
+    targetAngle = cmdAngle;
     targetVelocity = cmdVelocity;
     interrupts();
+  }
+}
+
+void onWsServerEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len) {
+  if (type == WS_EVT_CONNECT) {
+    Serial.println("WebSocket client connected");
+  } else if (type == WS_EVT_DISCONNECT) {
+    Serial.println("WebSocket client disconnected");
+  } else if (type == WS_EVT_ERROR) {
+    Serial.println("WebSocket error");
+  } else if (type == WS_EVT_PONG) {
+    Serial.println("WebSocket pong");
+  } else if (type == WS_EVT_DATA) {
+    AwsFrameInfo* info = (AwsFrameInfo*)arg;
+    if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+      data[len] = 0;
+      String input = String((char*)data);
+
+      if (!isCalibrated()) {
+        Serial.println("CMD: " + input + " ignored: Motor not calibrated yet");
+        return;
+      }
+      if (appState != AppState::RUNNING) {
+        Serial.println("CMD: " + input + " ignored: Motor not running");
+        return;
+      }
+
+      // Parse JSON command
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, input);
+      if (error) {
+        Serial.print(F("deserializeJson() failed: "));
+        Serial.println(error.f_str());
+        return;
+      }
+      if (doc["position"].is<int>() && doc["velocity"].is<int>()) {
+        int cmdPosition = doc["position"];
+        int cmdVelocity = doc["velocity"];
+        setPositionNormalized(cmdPosition, cmdVelocity);
+      } else {
+        Serial.println("Invalid command received: " + input);
+      }
+    }
   }
 }
 
@@ -246,7 +296,6 @@ std::vector<DebugField> debugFields = {
     {"state", true, [] { return appState; }},
     {"minAngle", true, [] { return minAngle; }},
     {"maxAngle", true, [] { return maxAngle; }},
-    {"velocityMultiplier", true, [] { return velocityMultiplier; }},
     {"shaft_velocity", false, [] { return motor.shaft_velocity; }},
     {"voltageQ", false, [] { return motor.voltage.q; }},
     // {"voltageD", false, [] { return motor.voltage.d; }},
@@ -305,16 +354,17 @@ void WebSocketTask(void* parameter) {
   cors.setOrigin("*");
   server.addMiddleware(&cors);
   server.addHandler(&wsserver);
+  wsserver.onEvent(onWsServerEvent);
   server.begin();
   Serial.println("✅ HTTP server started: http://" + WiFi.localIP().toString() + ":" + "PORT");  // TODO charger port depuis settings ? virer du constructeur
-
-  Serial.println("Connexion au WebSocket...");
-  wsclient.begin(WS_CLIENT_IP, WS_CLIENT_PORT, "/");
   wsclient.onEvent(onWsEvent);
   wsclient.setReconnectInterval(5000);
 
   while (1) {
-    wsclient.loop();
+    if (wsClientEnabled) {
+      wsclient.loop();
+    }
+
     vTaskDelay(10 / portTICK_PERIOD_MS);  // 10ms
   }
 }
@@ -419,7 +469,7 @@ void setup() {
   serialCommandHandler.registerCommand("calibrate", doCalibrate);
   serialCommandHandler.registerCommand("r", doRun);
   serialCommandHandler.registerCommand("run", doRun);
-  serialCommandHandler.registerCommand<int, int>("target", {"angle", "velocity"}, doTargetNormalized);
+  serialCommandHandler.registerCommand<int, int>("position", {"position", "velocity"}, doSetPosition);
   serialCommandHandler.registerCommand("debug", doGetDebug);
   serialCommandHandler.registerCommand("help", doGetSerialCommands);
   serialCommandHandler.registerCommand("fake", [] { minAngle = -3*PI; maxAngle = 3*PI; return "debug angles set to -3pi +3pi"; });
@@ -428,13 +478,11 @@ void setup() {
   restCommandHandler.registerCommand("stop", HTTP_GET, doStop);
   restCommandHandler.registerCommand("calibrate", HTTP_GET, doCalibrate);
   restCommandHandler.registerCommand("run", HTTP_GET, doRun);
-  restCommandHandler.registerCommand<int, int>("target", HTTP_POST, {"angle", "velocity"}, doTargetNormalized);
+  restCommandHandler.registerCommand<int, int>("position", HTTP_POST, {"position", "velocity"}, doSetPosition);
   restCommandHandler.registerCommand("debug", HTTP_GET, doGetDebug);
   restCommandHandler.registerCommand("help", HTTP_GET, doGetRestRoutes);
-  restCommandHandler.registerCommand<float>("velocityMultiplier", HTTP_POST, {"multiplier"}, [](float multiplier) {
-    velocityMultiplier = multiplier;
-    return "velocityMultiplier=" + String(velocityMultiplier);
-  });
+  restCommandHandler.registerCommand("startWsClient", HTTP_GET, doStartWsClient);
+  restCommandHandler.registerCommand("stopWsClient", HTTP_GET, doStopWsClient);
 }
 
 void loop() {
